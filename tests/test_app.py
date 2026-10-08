@@ -5,6 +5,7 @@ from nicegui import ui
 from nicegui.testing.user_simulation import user_simulation
 
 from fyntok.app import build_page
+from fyntok.auth import ChatGPTSession
 from fyntok.database import open_database
 from fyntok.importer import import_content
 from fyntok.manual import categories
@@ -15,7 +16,7 @@ def test_manual_ui_workflow(tmp_path, caplog):
     engine = open_database(tmp_path / 'ui.sqlite3')
 
     async def scenario():
-        async with user_simulation(lambda: build_page(engine)) as user:
+        async with user_simulation(lambda: build_page(engine, auth=ChatGPTSession(tmp_path / 'credentials'))) as user:
             await user.open('/')
             await user.should_see('0 matching transactions')
             # Upload exercises asynchronous bytes import as used by the browser.
@@ -83,6 +84,58 @@ def test_manual_ui_workflow(tmp_path, caplog):
             user.find('Delete category').click()
             await asyncio.sleep(0.05)
             assert [c['name'] for c in categories(engine)] == ['Uncategorized']
+    try:
+        asyncio.run(scenario())
+        assert not [r for r in caplog.records if r.levelname == 'ERROR']
+    finally:
+        engine.dispose()
+
+
+def test_ai_ui_proposals_model_selection_and_recalculation(tmp_path, caplog):
+    """A person connects their plan, edits and approves a suggestion, and reviews AI assignments."""
+    from fyntok.auth import ChatGPTSession
+    engine = open_database(tmp_path / 'ai-ui.sqlite3')
+    import_content(engine, b'a;EXAMPLE GROCERY;01.01.2024;01.01.2024;-10,00;EUR\n', 'bank.csv')
+    auth = ChatGPTSession(tmp_path / 'credentials')
+    with auth.locked():
+        data = auth.load()
+        data['accounts']['client'] = dict(subject='person', email='person@example.com')
+        data['active'] = 'client'
+        auth.save(data)
+
+    auth.start_login = lambda client_id=None: 'https://auth.openai.com/api/accounts/authorize?state=test'
+
+    class Advisor:
+        def models(self):
+            return [dict(slug='story-model', display_name='Story model')]
+
+        def propose(self, model, payload):
+            assert model == 'story-model'
+            return {'categories': [dict(name='Groceries', definition='Food at supermarkets', kind='spending')]}
+
+        def classify(self, model, payload):
+            category = next(c for c in payload['categories'] if c['name'] == 'Food')
+            return {'assignments': [dict(transaction_id=t['transaction_id'], category_id=category['id'], reason='Supermarket')
+                                    for t in payload['transactions']]}
+
+    async def scenario():
+        async with user_simulation(lambda: build_page(engine, Advisor(), auth)) as user:
+            await user.open('/')
+            user.find(kind=ui.button, content='Load models').click()
+            await user.should_see('ChatGPT plan connected.')
+            user.find('Propose categories').click()
+            await user.should_see('1 suggestions ready for review.')
+            assert len(categories(engine)) == 1
+            user.find('Suggested name').clear().type('Food')
+            user.find('Approve category').click()
+            await asyncio.sleep(0.05)
+            assert {c['name'] for c in categories(engine)} == {'Food', 'Uncategorized'}
+            user.find('Recalculate categories — all transactions').click()
+            await user.should_see('Completed: 1 applied, 0 protected or changed; 1 / 1 processed.')
+            assert transaction_rows(engine)[0]['category'] == 'Food'
+            assert transaction_rows(engine)[0]['source'] == 'ai'
+            user.find('Sign out').click()
+            await user.should_see('Signed out.')
     try:
         asyncio.run(scenario())
         assert not [r for r in caplog.records if r.levelname == 'ERROR']

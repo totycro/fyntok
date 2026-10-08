@@ -24,7 +24,7 @@ def columns(*names):
     return [dict(name=n, label=n.replace('_', ' ').title(), field=n, sortable=True, align='left') for n in names]
 
 
-def build_page(engine):
+def build_page(engine, ai_client=None, auth=None):
     ui.label('fyntok').classes('text-3xl font-bold')
     ui.label('Explore your history and refine one transaction at a time.').classes('text-gray-600')
     with ui.expansion('Import CSV', icon='upload').classes('w-full'):
@@ -61,6 +61,12 @@ def build_page(engine):
         f.validate()
         return f
 
+    from .auth import ChatGPTSession
+    from .ai import ResponsesClient
+    from .ai_ui import build_ai_panel
+    auth = auth or ChatGPTSession()
+    ai_client = ai_client or ResponsesClient(auth)
+
     def refresh():
         category_filter.options = {c['id']: c['name'] for c in categories(engine)}
         if category_filter.value not in category_filter.options:
@@ -91,7 +97,7 @@ def build_page(engine):
             kind = ui.select({'spending': 'Spending', 'income': 'Income', 'transfer': 'Internal transfer'},
                              label='Financial type', value=category['kind'] if category else 'spending')
             if category:
-                ui.label('Definition changes take effect for future categorization. Historical recalculation becomes available in milestone 3.')
+                ui.label('Definition changes take effect for future categorization. Use Recalculate categories for all history or filter by this category to revisit affected transactions.')
             ui.button('Save', on_click=lambda: perform(lambda: save_category(
                 engine, name.value or '', definition.value or '', kind.value,
                 category_id=category['id'] if category else None,
@@ -188,13 +194,18 @@ def build_page(engine):
                                for r in session.scalars(select(Import).order_by(Import.created_at.desc()))]
                 ui.table(columns=columns('filename', 'created_at', 'row_count', 'inserted_count', 'duplicate_count'),
                          rows=records, row_key='id', pagination=20).classes('w-full')
+    build_ai_panel(engine, ai_client, auth, filters, refresh)
     content()
     refresh()
 
 
 def serve(engine, port: int = 8080):
+    from .auth import ChatGPTSession
+    from .ai import ResponsesClient
+    auth = ChatGPTSession()
+    ai_client = ResponsesClient(auth)
     @ui.page('/')
     def index():
         with ui.column().classes('w-full max-w-screen-2xl mx-auto p-6'):
-            build_page(engine)
+            build_page(engine, ai_client, auth)
     ui.run(host='127.0.0.1', port=port, title='fyntok', reload=False, show=False)

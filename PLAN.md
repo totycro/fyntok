@@ -77,7 +77,7 @@ The [categorization experiment](experiments/categorization/README.md) supports c
 
 Implement these milestones in order, using each completed milestone as a working checkpoint. Update each status as work progresses: **Not started**, **In progress**, **Blocked** (with the reason), or **Complete**. Record completed work, remaining work, and validation results here so implementation can continue across context windows. Mark a milestone complete only after its completion criteria are verified.
 
-The retained categorization experiment and application milestones 1–2 are complete. Milestones 3–4 have not started. Reuse its validated parsing and integration code where appropriate; production integration and application behavior still require implementation and validation.
+The retained categorization experiment and application milestones 1–3 are complete. Milestone 4 has not started. Reuse its validated parsing and integration code where appropriate; production integration and application behavior still require implementation and validation.
 
 ### Milestone 1: Data and persistence
 
@@ -126,7 +126,7 @@ Remaining work: milestones 3–4. Definition changes currently explain that hist
 
 ### Milestone 3: AI workflow
 
-**Status: Not started**
+**Status: Complete**
 
 - Adapt the retained experiment behind a small replaceable Python interface, with supported ChatGPT sign-in, persistent registration, protected credentials, token refresh, sign-out, model discovery, and model selection.
 - Implement category proposals from representative descriptions, requiring user approval before adding categories.
@@ -135,6 +135,17 @@ Remaining work: milestones 3–4. Definition changes currently explain that hist
 - Run AI work asynchronously with visible progress and persist completed work for the reliability milestone.
 
 **Completion criteria:** The application supports sign-in, approved category proposals, and whole-dataset or filtered recalculation. Verify the supermarket correction interaction, example use for new imports and repeated reprocessing, replacement of changed examples, and exclusion of manual assignments and intervening user edits from automatic application. Manual workflows remain available when AI access is unavailable.
+
+Completed October 8, 2026:
+
+- Adapted the retained experiment into a small `AIClient` protocol and public streaming Responses adapter. Rechecked the official sign-in, session, inference, and preview documentation. Requests include explicit context, `store: false`, strict structured output, and only account-selected models; there is no API billing fallback.
+- Added ChatGPT OAuth controls with ephemeral localhost callbacks, state/nonce/PKCE and signed ID-token verification, saved account registrations and stable host ID, protected atomic credential writes outside the repository/database, process-serialized rotating refresh, and sign-out with attempted remote revocation. Saved registrations support account selection, returning sign-in, and new account registration.
+- Added representative-description category proposals with editable drafts and explicit individual approval. Added all-history and filtered recalculation using current definitions and latest confirmed examples, bounded relevance ranking, minimized descriptions, and automatic application with assignment history and manual protection.
+- Added background execution, visible and durable batch progress, validated results and assignment IDs, serialized run creation/claim, and revision checks before application. Category/example changes conservatively skip stale results. Completed batches survive later failures and database reopening.
+- Added readable acceptance stories with a deliberately mistaken scripted advisor: one supermarket correction guides history, changed decisions replace old examples, new imports and repeated runs use guidance, filters limit scope, intervening decisions/definitions win, AI changes support undo, proposals wait for approval, updated definitions reach requests, and AI failures leave manual review available.
+- Validation: `uv run --locked pytest -q` passed **55 tests**, including **10 acceptance cases** and two NiceGUI user-simulation workflows. Additional checks cover malformed/unknown/duplicate output, relevance ranking, request minimization and streaming flags, incomplete streams, durable batches, actual signed-token validation, rejected nonce/signature/expiry/identity, token rotation, protected file permissions, registration reuse, and sign-out when remote revocation is unavailable. A real CLI server smoke check returned HTTP 200 and rendered the AI controls against a temporary database. No live authentication/inference or visual browser inspection was performed in this milestone; mocked boundary tests and the retained live experiment provide the current evidence.
+
+Remaining work is milestone 4: cancellation/resume and interrupted-process recovery UI, broader session/limit failure tests, and manually reviewed model/retrieval accuracy. Credentials use Unix file locks (Linux/macOS). Free-form description minimization is heuristic; definitions are transmitted as written. An interrupted process can leave a pending/running run that blocks a new one until recovery is implemented. These limitations are documented in README.md.
 
 ### Milestone 4: Run reliability and validation
 

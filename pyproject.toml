@@ -5,8 +5,10 @@ description = "Local historical transaction categorization and analysis"
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "SQLAlchemy==2.1.4",
+    "httpx==0.28.1",
     "nicegui[plotly]==3.18.0",
     "plotly==6.9.0",
+    "pyjwt[crypto]==2.15.1",
 ]
 
 [dependency-groups]
