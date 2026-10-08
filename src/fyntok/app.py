@@ -43,7 +43,7 @@ def build_page(engine, ai_client=None, auth=None):
                 ui.notify(f'Imported {result.inserted_count} new transactions; {result.duplicate_count} already present.', type='positive')
                 refresh()
             except (ValueError, SQLAlchemyError, UnicodeError) as exc:
-                logger.warning('CSV import failed (%s)', type(exc).__name__)
+                logger.exception('CSV import failed (%s)', type(exc).__name__)
                 ui.notify(str(exc), type='negative')
         ui.upload(on_upload=upload, auto_upload=True, label='Choose bank export').props('accept=.csv').classes('w-full')
     with ui.row().classes('items-end w-full'):
@@ -96,7 +96,7 @@ def build_page(engine, ai_client=None, auth=None):
         try:
             action()
         except (ValueError, SQLAlchemyError) as exc:
-            logger.warning('%s failed (%s)', label, type(exc).__name__)
+            logger.exception('%s failed (%s)', label, type(exc).__name__)
             ui.notify(str(exc), type='negative')
             return
         dialog.close()
@@ -179,7 +179,7 @@ def build_page(engine, ai_client=None, auth=None):
             monthly = aggregate(engine, filters=f)
             summaries = aggregate(engine, by='merchant', filters=f)
         except ValueError as exc:
-            logger.debug('Refresh results: invalid filters (%s)', type(exc).__name__)
+            logger.exception('Refresh results failed: invalid filters (%s)', type(exc).__name__)
             ui.label(str(exc)).classes('text-red-700')
             return
         logger.debug('Refresh results: displaying %d matching transactions', len(rows))

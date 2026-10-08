@@ -1,6 +1,7 @@
 """Exercise real NiceGUI callbacks through its built-in user simulator."""
 import asyncio
 import logging
+import pytest
 
 from nicegui import ui
 from nicegui.testing.user_simulation import user_simulation
@@ -162,8 +163,9 @@ def test_ai_ui_proposals_model_selection_and_recalculation(tmp_path, caplog):
         engine.dispose()
 
 
-def test_proposal_failure_is_logged_without_private_error_details(tmp_path, caplog):
-    caplog.set_level(logging.DEBUG, logger='fyntok')
+@pytest.mark.parametrize('error_type', [ValueError, RuntimeError])
+def test_proposal_failure_logs_traceback_at_default_level(tmp_path, caplog, error_type):
+    caplog.set_level(logging.INFO, logger='fyntok')
     engine = open_database(tmp_path / 'failed-proposal.sqlite3')
 
     class Advisor:
@@ -171,7 +173,7 @@ def test_proposal_failure_is_logged_without_private_error_details(tmp_path, capl
             return [dict(slug='test-model', display_name='Test model')]
 
         def propose(self, model, payload):
-            raise RuntimeError('private response body and credentials')
+            raise error_type('proposal request failed')
 
     async def scenario():
         async with user_simulation(lambda: build_page(
@@ -180,14 +182,17 @@ def test_proposal_failure_is_logged_without_private_error_details(tmp_path, capl
             user.find(kind=ui.button, content='Load models').click()
             await user.should_see('ChatGPT plan connected.')
             user.find('Propose categories').click()
-            await user.should_see('Category suggestions unavailable (RuntimeError).')
+            await user.should_see(f'Category suggestions unavailable ({error_type.__name__}).')
 
     try:
         asyncio.run(scenario())
-        assert 'Propose categories: requested' in caplog.text
-        assert 'Propose categories failed (RuntimeError)' in caplog.text
+        record = next(r for r in caplog.records if r.getMessage().startswith('Propose categories failed'))
+        assert record.levelno == logging.ERROR
+        assert record.exc_info and record.exc_info[0] is error_type
+        assert 'Traceback (most recent call last):' in caplog.text
+        assert f'{error_type.__name__}: proposal request failed' in caplog.text
+        assert 'in propose' in caplog.text
         assert 'Propose categories: completed' not in caplog.text
-        assert 'private response body and credentials' not in caplog.text
     finally:
         engine.dispose()
 

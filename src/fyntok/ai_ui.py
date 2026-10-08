@@ -38,7 +38,7 @@ def build_ai_panel(engine, client, auth, filters, refresh):
                 status.set_text('Open ChatGPT sign-in, then return here and load models.')
                 logger.debug('Continue with ChatGPT: sign-in link ready')
             except Exception as exc:
-                logger.warning('Continue with ChatGPT failed (%s)', type(exc).__name__)
+                logger.exception('Continue with ChatGPT failed (%s)', type(exc).__name__)
                 status.set_text(f'Sign-in unavailable ({type(exc).__name__}). Try again.')
 
         async def load_models():
@@ -57,7 +57,7 @@ def build_ai_panel(engine, client, auth, filters, refresh):
                 status.set_text('ChatGPT plan connected.' if catalog else 'No available models for this account.')
                 logger.debug('Load models: completed with %d available models', len(catalog))
             except Exception as exc:
-                logger.warning('Load models failed (%s)', type(exc).__name__)
+                logger.exception('Load models failed (%s)', type(exc).__name__)
                 model.options, model.value = {}, None
                 model.update()
                 status.set_text(f'AI unavailable ({type(exc).__name__}). Sign in with plan permission or check plan limits.')
@@ -71,7 +71,7 @@ def build_ai_panel(engine, client, auth, filters, refresh):
             try:
                 confirmed = await run.io_bound(auth.sign_out)
             except Exception as exc:
-                logger.warning('Sign out failed (%s)', type(exc).__name__)
+                logger.exception('Sign out failed (%s)', type(exc).__name__)
                 raise
             model.options, model.value = {}, None
             model.update()
@@ -114,7 +114,7 @@ def build_ai_panel(engine, client, auth, filters, refresh):
                                     ui.notify('Category approved and saved.', type='positive')
                                     logger.debug('Approve category: completed')
                                 except ValueError as exc:
-                                    logger.warning('Approve category failed (%s)', type(exc).__name__)
+                                    logger.exception('Approve category failed (%s)', type(exc).__name__)
                                     ui.notify(str(exc), type='negative')
                             ui.button('Approve category', on_click=approve)
                             def dismiss(card=card):
@@ -124,7 +124,7 @@ def build_ai_panel(engine, client, auth, filters, refresh):
                 status.set_text(f'{len(suggestions)} suggestions ready for review.')
                 logger.debug('Propose categories: completed with %d suggestions', len(suggestions))
             except Exception as exc:
-                logger.warning('Propose categories failed (%s)', type(exc).__name__)
+                logger.exception('Propose categories failed (%s)', type(exc).__name__)
                 status.set_text(f'Category suggestions unavailable ({type(exc).__name__}). Manual category creation remains available.')
             finally:
                 state['busy'] = False
@@ -185,7 +185,7 @@ def build_ai_panel(engine, client, auth, filters, refresh):
                 result = await run.io_bound(resume_run, engine, client, state['run_id'])
                 logger.debug('Resume / recover selected run: worker finished with status=%s', result['status'])
             except ValueError as exc:
-                logger.warning('Resume / recover selected run failed (%s)', type(exc).__name__)
+                logger.exception('Resume / recover selected run failed (%s)', type(exc).__name__)
                 ui.notify(str(exc), type='warning')
             finally:
                 state['busy'] = state['running'] = False
@@ -204,7 +204,7 @@ def build_ai_panel(engine, client, auth, filters, refresh):
                 state['run_id'] = start_run(engine, model.value, scope)
                 logger.debug('%s: saved run; starting background categorization', action)
             except ValueError as exc:
-                logger.warning('%s failed to start (%s)', action, type(exc).__name__)
+                logger.exception('%s failed to start (%s)', action, type(exc).__name__)
                 ui.notify(str(exc), type='negative')
                 return
             state['busy'] = True
@@ -214,7 +214,7 @@ def build_ai_panel(engine, client, auth, filters, refresh):
                 result = await run.io_bound(execute_run, engine, client, state['run_id'])
                 logger.debug('%s: worker finished with status=%s', action, result['status'])
             except ValueError as exc:
-                logger.warning('%s failed (%s)', action, type(exc).__name__)
+                logger.exception('%s failed (%s)', action, type(exc).__name__)
                 ui.notify(str(exc), type='warning')
             finally:
                 state['busy'] = False

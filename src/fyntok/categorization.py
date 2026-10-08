@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from dataclasses import asdict
 import fcntl
+import logging
 from pathlib import Path
 import re
 
@@ -15,6 +16,7 @@ from .queries import Filters, transaction_rows
 
 
 BATCH_SIZE = 25
+logger = logging.getLogger(__name__)
 
 
 def minimize_description(description: str, account: str = '') -> str:
@@ -240,6 +242,7 @@ def _execute_run(engine, client: AIClient, run_id, on_progress=None):
             if on_progress:
                 on_progress(run_progress(engine, run_id))
     except Exception as exc:
+        logger.exception('Categorization run failed (%s)', type(exc).__name__)
         # No raw transport errors or response bodies are stored: they may contain private data.
         with Session(engine) as session, session.begin():
             session.connection().exec_driver_sql('BEGIN IMMEDIATE')
