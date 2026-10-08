@@ -1,0 +1,23 @@
+[project]
+name = "fyntok"
+version = "0.1.0"
+description = "Local historical transaction categorization and analysis"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "SQLAlchemy==2.1.4",
+    "nicegui[plotly]==3.18.0",
+    "plotly==6.9.0",
+]
+
+[dependency-groups]
+dev = ["pytest==9.1.1"]
+
+[project.scripts]
+fyntok = "fyntok.cli:main"
+
+[build-system]
+requires = ["uv_build==0.11.9"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

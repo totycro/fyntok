@@ -77,11 +77,11 @@ The [categorization experiment](experiments/categorization/README.md) supports c
 
 Implement these milestones in order, using each completed milestone as a working checkpoint. Update each status as work progresses: **Not started**, **In progress**, **Blocked** (with the reason), or **Complete**. Record completed work, remaining work, and validation results here so implementation can continue across context windows. Mark a milestone complete only after its completion criteria are verified.
 
-The retained categorization experiment is complete, but the application milestones below have not started. Reuse its validated parsing and integration code where appropriate; production integration and application behavior still require implementation and validation.
+The retained categorization experiment and application milestone 1 are complete. Milestones 2–4 have not started. Reuse its validated parsing and integration code where appropriate; production integration and application behavior still require implementation and validation.
 
 ### Milestone 1: Data and persistence
 
-**Status: Not started**
+**Status: Complete**
 
 - Set up the Python 3.14 application with `uv`, exact direct dependency versions, and a committed lockfile.
 - Implement the SQLAlchemy/SQLite schema for transactions, stable categories, active and previous assignments, human-confirmed examples, imports, and categorization runs.
@@ -89,6 +89,18 @@ The retained categorization experiment is complete, but the application mileston
 - Implement deterministic SQL aggregation for monthly totals and counts, trends, and merchant summaries, with spending, income, internal transfers, and uncategorized transactions represented separately.
 
 **Completion criteria:** The supplied dataset imports into persistent storage; exact totals, date parsing, monthly aggregation, and reload behavior pass automated checks. The schema supports assignment history and durable run progress required by later milestones.
+
+Completed October 8, 2026:
+
+- Added the Python 3.14 `uv` project, exact dependency pins, `.python-version`, and root `uv.lock`. Selected SQLAlchemy 2.1.4, NiceGUI 3.18.0, pytest 9.1.1, and Plotly 6.9.0 (the latest stable version compatible with NiceGUI's Plotly extra).
+- Implemented schema version 1 with stable categories, transactions, import bytes and row provenance, active/previous assignments, latest confirmed examples, and categorization runs with snapshots and durable per-transaction results, status, attempts, and revision checks for later application logic. Enforced foreign keys, one active assignment, and matching transaction/category references for examples and history.
+- Implemented atomic CP1252 CSV import with both dates, all original fields, integer cents, and import history. Repeat/overlapping exports reuse exact rows by field hash and occurrence number; duplicate multiplicity within exports is preserved. The ambiguity of identical transactions across exports is documented in README.md.
+- Implemented deterministic SQL monthly category totals/counts, category trends, and merchant summaries with separate financial buckets and currency grouping. Added command-line import and analysis commands and local setup documentation.
+- Verified persistent import, repeat-import deduplication, and monthly totals against an independent CSV calculation. Private financial totals and date ranges are omitted.
+- Validation: `uv sync --locked` succeeded on Python 3.14.4; `uv run --locked pytest -q` passed **13 tests** including every supplied row, both dates, every monthly total against an independent CSV calculation, exact totals, reopen/repeat behavior, malformed import rollback, duplicate/overlap behavior, currencies and financial buckets, active assignment uniqueness, history/examples, durable run progress, and unknown schema refusal. Private-data checks skip explicitly if the supplied CSV is absent.
+
+Remaining work: milestones 2–4, including manual assignment/category services and UI, AI integration, and actual run application/cancellation/resume behavior. This milestone establishes their persistent schema; it does not implement those later workflows.
+
 
 ### Milestone 2: Manual application
 
