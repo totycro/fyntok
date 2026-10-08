@@ -7,6 +7,43 @@ import httpx
 from .auth import RESOURCE, ChatGPTSession
 
 
+class AIRequestError(RuntimeError):
+    """Safe diagnostic fields only; server messages may contain private inputs."""
+    def __init__(self, status=None, code=None):
+        self.status = status
+        known = {
+            'subscription_sharing_usage_limit_exceeded': 'Plan usage limit reached. Check ChatGPT Settings → Usage, then resume later.',
+            'subscription_sharing_user_not_eligible': 'ChatGPT plan usage is unavailable for this account or policy.',
+            'subscription_sharing_usage_unavailable': 'Plan usage availability could not be checked. Resume later.',
+            'subscription_sharing_user_unavailable': 'ChatGPT account availability could not be checked. Resume later.',
+            'subscription_sharing_invalid_user': 'ChatGPT session is invalid. Sign in again.',
+            'subscription_sharing_unsupported_capability': 'The model or request capability is unsupported. Check the selected model.',
+            'subscription_sharing_route_not_supported': 'The ChatGPT request route is unsupported.',
+            'chatpass_v2_scope_not_authorized': 'ChatGPT plan permission does not authorize this request.',
+            'chatpass_v2_invalid_authorization_context': 'ChatGPT plan authorization is invalid.',
+        }
+        self.code = code if isinstance(code, str) and code in known else None
+        message = known.get(self.code, {
+            401: 'ChatGPT session was rejected. Check your account and sign in again.',
+            403: 'ChatGPT plan access was denied. Check account permission and policy.',
+            429: 'Usage limit reached. Check ChatGPT Settings → Usage, then resume later.',
+            503: 'ChatGPT is temporarily unavailable. Resume later.',
+        }.get(status, 'ChatGPT request did not complete. Check sign-in, model, and plan access.'))
+        super().__init__(message + (f' (HTTP {status})' if status else '') +
+                         (f' [{self.code}]' if self.code else ''))
+
+
+def response_error(response):
+    response.read()
+    try:
+        body = response.json()
+        error = body.get('error', {}) if isinstance(body, dict) else {}
+        code = error.get('code') if isinstance(error, dict) else None
+    except ValueError:
+        code = None
+    return AIRequestError(response.status_code, code)
+
+
 class AIClient(Protocol):
     def models(self) -> list[dict]: ...
     def classify(self, model: str, payload: dict) -> dict: ...
@@ -42,7 +79,7 @@ class ResponsesClient:
         with httpx.Client(timeout=30, headers={'Authorization': 'Bearer ' + self.session.access_token()}) as client:
             response = client.get(RESOURCE + '/models')
             if response.is_error:
-                raise RuntimeError(f'ChatGPT models unavailable (HTTP {response.status_code}).')
+                raise response_error(response)
             return [dict(slug=m['slug'], display_name=m['display_name'])
                     for m in response.json()['models'] if m.get('visibility') == 'list']
 
@@ -56,13 +93,14 @@ class ResponsesClient:
         with httpx.Client(timeout=180, headers={'Authorization': 'Bearer ' + self.session.access_token()}) as client:
             with client.stream('POST', RESOURCE + '/responses', json=body) as response:
                 if response.is_error:
-                    raise RuntimeError(f'ChatGPT request failed (HTTP {response.status_code}). Check your session and plan limits.')
+                    raise response_error(response)
                 for line in response.iter_lines():
                     if not line.startswith('data:') or line[5:].strip() == '[DONE]':
                         continue
                     event = json.loads(line[5:])
                     if event.get('type') in {'response.failed', 'response.incomplete', 'error'}:
-                        raise RuntimeError('ChatGPT did not complete the request. Check your session and plan limits.')
+                        error = event.get('response', {}).get('error') or event.get('error') or event
+                        raise AIRequestError(code=error.get('code') if isinstance(error, dict) else None)
                     if event.get('type') == 'response.completed':
                         completed = event['response']
         if self.session.active_account() != account:

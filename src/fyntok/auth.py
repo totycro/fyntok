@@ -171,7 +171,18 @@ class ChatGPTSession:
                 response = httpx.post(TOKEN_URL, data=dict(grant_type='refresh_token', client_id=record['client_id'],
                     refresh_token=record['refresh_token'], resource=RESOURCE), timeout=30)
                 if response.is_error:
-                    raise RuntimeError(f'Session refresh failed (HTTP {response.status_code}). Sign in again.')
+                    try:
+                        error = response.json().get('error')
+                        code = error.get('code') if isinstance(error, dict) else error
+                    except (ValueError, AttributeError):
+                        code = None
+                    if code in {'invalid_grant', 'invalid_refresh_token', 'token_expired',
+                                'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused'}:
+                        for field in ('access_token', 'refresh_token', 'id_token'):
+                            record.pop(field, None)
+                        self.save(data)
+                        raise RuntimeError('Session expired or revoked. Sign in again using the saved account.')
+                    raise RuntimeError(f'Session refresh failed (HTTP {response.status_code}). Credentials retained; retry later or check client configuration.')
                 tokens = response.json()
                 record.update(tokens)
                 if 'scope' in tokens:

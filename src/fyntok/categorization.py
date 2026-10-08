@@ -1,11 +1,14 @@
 """Historical AI workflows with durable progress and atomic, revision-checked application."""
+from contextlib import contextmanager
 from dataclasses import asdict
+import fcntl
+from pathlib import Path
 import re
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .ai import AIClient
+from .ai import AIClient, AIRequestError
 from .manual import _active, _assign, categories, save_category
 from .models import Category, CategorizationRun, ConfirmedExample, RunItem, Transaction
 from .queries import Filters, transaction_rows
@@ -130,11 +133,64 @@ def run_progress(engine, run_id):
                     done=sum(i.status in {'applied', 'skipped', 'failed'} for i in items), error=run.error)
 
 
+@contextmanager
+def worker_lock(engine):
+    """OS releases this lock on process death; never steal a live worker's run."""
+    path = Path(engine.url.database).resolve()
+    with open(str(path) + '.ai.lock', 'a') as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('An AI worker is still active. Wait for its request to finish before recovery.') from None
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def cancel_run(engine, run_id):
+    """Persist cancellation immediately; any in-flight result is discarded."""
+    with Session(engine) as session, session.begin():
+        session.connection().exec_driver_sql('BEGIN IMMEDIATE')
+        run = session.get(CategorizationRun, run_id)
+        if run is None:
+            raise ValueError('Run does not exist.')
+        if run.status in {'pending', 'running'}:
+            run.status, run.error = 'cancelled', None
+    return run_progress(engine, run_id)
+
+
+def resume_run(engine, client, run_id, on_progress=None):
+    """Recover abandoned work and execute while holding one uninterrupted lock."""
+    with worker_lock(engine):
+        with Session(engine) as session, session.begin():
+            session.connection().exec_driver_sql('BEGIN IMMEDIATE')
+            run = session.get(CategorizationRun, run_id)
+            if run is None or run.status == 'completed':
+                raise ValueError('Choose an unfinished run to resume.')
+            other = session.scalar(select(CategorizationRun.id).where(
+                CategorizationRun.id != run_id, CategorizationRun.status.in_(['pending', 'running'])))
+            if other:
+                raise ValueError('Cancel or recover the other unfinished run first.')
+            for item in session.scalars(select(RunItem).where(RunItem.run_id == run_id,
+                    RunItem.status.in_(['running', 'failed', 'validated']))):
+                item.status, item.error, item.result = 'pending', None, None
+            run.status, run.error = 'pending', None
+        return _execute_run(engine, client, run_id, on_progress)
+
+
 def execute_run(engine, client: AIClient, run_id, on_progress=None):
+    with worker_lock(engine):
+        return _execute_run(engine, client, run_id, on_progress)
+
+
+def _execute_run(engine, client: AIClient, run_id, on_progress=None):
     """Execute in a worker thread. Each completed batch commits independently."""
     with Session(engine) as session, session.begin():
         session.connection().exec_driver_sql('BEGIN IMMEDIATE')
         run = session.get(CategorizationRun, run_id)
+        if run is not None and run.status == 'cancelled':
+            return run_progress(engine, run_id)
         if run is None or run.status != 'pending':
             raise ValueError('Run is not pending.')
         model, snapshot, examples = run.model, run.category_snapshot, run.example_snapshot
@@ -142,6 +198,9 @@ def execute_run(engine, client: AIClient, run_id, on_progress=None):
     try:
         while True:
             with Session(engine) as session, session.begin():
+                session.connection().exec_driver_sql('BEGIN IMMEDIATE')
+                if session.get(CategorizationRun, run_id).status == 'cancelled':
+                    break
                 items = list(session.scalars(select(RunItem).where(RunItem.run_id == run_id, RunItem.status == 'pending')
                     .order_by(RunItem.transaction_id).limit(BATCH_SIZE)))
                 if not items:
@@ -157,6 +216,10 @@ def execute_run(engine, client: AIClient, run_id, on_progress=None):
             assignments = validate_assignments(client.classify(model, payload), targets, snapshot)
             with Session(engine) as session, session.begin():
                 session.connection().exec_driver_sql('BEGIN IMMEDIATE')
+                if session.get(CategorizationRun, run_id).status == 'cancelled':
+                    for item in session.scalars(select(RunItem).where(RunItem.run_id == run_id, RunItem.status == 'running')):
+                        item.status = 'pending'
+                    break
                 current_categories = [dict(id=c.id, name=c.name, definition=c.definition, kind=c.kind, revision=c.revision)
                     for c in session.scalars(select(Category).where(Category.archived.is_(False)).order_by(Category.name))]
                 category_changed = current_categories != snapshot
@@ -179,10 +242,13 @@ def execute_run(engine, client: AIClient, run_id, on_progress=None):
     except Exception as exc:
         # No raw transport errors or response bodies are stored: they may contain private data.
         with Session(engine) as session, session.begin():
+            session.connection().exec_driver_sql('BEGIN IMMEDIATE')
             run = session.get(CategorizationRun, run_id)
-            run.status, run.error = 'failed', f'AI request failed ({type(exc).__name__}). Check sign-in, model, and plan limits; completed work is retained.'
+            if run.status != 'cancelled':
+                detail = str(exc) if isinstance(exc, AIRequestError) else f'AI request failed ({type(exc).__name__}). Check sign-in, model, and plan limits.'
+                run.status, run.error = 'failed', detail + ' Completed work is retained; resume when access is available.'
             for item in session.scalars(select(RunItem).where(RunItem.run_id == run_id, RunItem.status == 'running')):
-                item.status, item.error = 'failed', run.error
+                item.status, item.error = ('pending' if run.status == 'cancelled' else 'failed'), run.error
     result = run_progress(engine, run_id)
     if on_progress:
         on_progress(result)

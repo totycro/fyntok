@@ -101,3 +101,46 @@ def test_completed_batches_survive_a_later_failure_and_reopening(tmp_path, monke
         applied = next(i for i in items if i.status == 'applied')
         assert applied.applied_assignment_id and applied.result['reason'] == 'Unclear'
     engine.dispose()
+
+
+@pytest.mark.parametrize('status,code', [(401, None), (403, 'subscription_sharing_user_not_eligible'),
+    (429, 'subscription_sharing_usage_limit_exceeded'), (503, 'subscription_sharing_usage_unavailable')])
+@pytest.mark.parametrize('streamed', [False, True])
+def test_session_and_plan_errors_stop_without_billing_fallback(monkeypatch, status, code, streamed):
+    from fyntok.ai import AIRequestError
+    class Login:
+        def active_account(self): return 'account'
+        def access_token(self): return 'oauth-token'
+    requests = []
+    def respond(request):
+        requests.append(request)
+        if streamed:
+            return httpx.Response(200, text='data: ' + json.dumps(dict(type='response.failed',
+                response={'error': {'code': code, 'message': 'private bank description'}})) + '\n\n')
+        return httpx.Response(status, json={'error': {'code': code, 'message': 'private bank description'}})
+    factory = httpx.Client
+    monkeypatch.setattr(httpx, 'Client', lambda **kwargs: factory(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(AIRequestError) as caught:
+        ResponsesClient(Login()).propose('model', {'descriptions': ['Synthetic']})
+    assert 'private' not in str(caught.value)
+    assert caught.value.code == code
+    assert len(requests) == 1 and requests[0].url == 'https://api.openai.com/v1/responses'
+    assert requests[0].headers['Authorization'] == 'Bearer oauth-token'
+
+
+def test_signout_during_stream_rejects_completed_result(monkeypatch):
+    class Login:
+        signed_in = True
+        def active_account(self): return 'account'
+        def access_token(self):
+            if not self.signed_in: raise RuntimeError('Signed out')
+            return 'oauth-token'
+    login = Login()
+    def respond(request):
+        login.signed_in = False
+        return httpx.Response(200, text='data: ' + json.dumps(dict(type='response.completed',
+            response={'output': [{'content': [{'type': 'output_text', 'text': '{"categories": []}'}]}]})) + '\n\n')
+    factory = httpx.Client
+    monkeypatch.setattr(httpx, 'Client', lambda **kwargs: factory(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(RuntimeError, match='Signed out'):
+        ResponsesClient(login).propose('model', {})

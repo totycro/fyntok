@@ -1,0 +1,343 @@
+{
+  "reviewer": null,
+  "categories": [
+    {
+      "id": "uncategorized",
+      "name": "Uncategorized",
+      "definition": "Insufficient description to determine purpose",
+      "kind": "uncategorized"
+    },
+    {
+      "id": "food",
+      "name": "Groceries",
+      "definition": "Food at supermarkets",
+      "kind": "spending"
+    },
+    {
+      "id": "shopping",
+      "name": "Shopping",
+      "definition": "General retail and online purchases",
+      "kind": "spending"
+    },
+    {
+      "id": "care",
+      "name": "Personal care",
+      "definition": "Drugstores, toiletries, personal care",
+      "kind": "spending"
+    },
+    {
+      "id": "transfer",
+      "name": "Internal transfers",
+      "definition": "Transfers between own accounts only; unknown recipient is insufficient",
+      "kind": "transfer"
+    }
+  ],
+  "examples": [
+    {
+      "example_id": "noise-0",
+      "description": "Unrelated pharmacy example 0",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-1",
+      "description": "Unrelated pharmacy example 1",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-2",
+      "description": "Unrelated pharmacy example 2",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-3",
+      "description": "Unrelated pharmacy example 3",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-4",
+      "description": "Unrelated pharmacy example 4",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-5",
+      "description": "Unrelated pharmacy example 5",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-6",
+      "description": "Unrelated pharmacy example 6",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-7",
+      "description": "Unrelated pharmacy example 7",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-8",
+      "description": "Unrelated pharmacy example 8",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-9",
+      "description": "Unrelated pharmacy example 9",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-10",
+      "description": "Unrelated pharmacy example 10",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-11",
+      "description": "Unrelated pharmacy example 11",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-12",
+      "description": "Unrelated pharmacy example 12",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-13",
+      "description": "Unrelated pharmacy example 13",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-14",
+      "description": "Unrelated pharmacy example 14",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-15",
+      "description": "Unrelated pharmacy example 15",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-16",
+      "description": "Unrelated pharmacy example 16",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-17",
+      "description": "Unrelated pharmacy example 17",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-18",
+      "description": "Unrelated pharmacy example 18",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-19",
+      "description": "Unrelated pharmacy example 19",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-20",
+      "description": "Unrelated pharmacy example 20",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-21",
+      "description": "Unrelated pharmacy example 21",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-22",
+      "description": "Unrelated pharmacy example 22",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-23",
+      "description": "Unrelated pharmacy example 23",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-24",
+      "description": "Unrelated pharmacy example 24",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-25",
+      "description": "Unrelated pharmacy example 25",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-26",
+      "description": "Unrelated pharmacy example 26",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-27",
+      "description": "Unrelated pharmacy example 27",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-28",
+      "description": "Unrelated pharmacy example 28",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-29",
+      "description": "Unrelated pharmacy example 29",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-30",
+      "description": "Unrelated pharmacy example 30",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-31",
+      "description": "Unrelated pharmacy example 31",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-32",
+      "description": "Unrelated pharmacy example 32",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-33",
+      "description": "Unrelated pharmacy example 33",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-34",
+      "description": "Unrelated pharmacy example 34",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-35",
+      "description": "Unrelated pharmacy example 35",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-36",
+      "description": "Unrelated pharmacy example 36",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-37",
+      "description": "Unrelated pharmacy example 37",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-38",
+      "description": "Unrelated pharmacy example 38",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-39",
+      "description": "Unrelated pharmacy example 39",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-40",
+      "description": "Unrelated pharmacy example 40",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-41",
+      "description": "Unrelated pharmacy example 41",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-42",
+      "description": "Unrelated pharmacy example 42",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-43",
+      "description": "Unrelated pharmacy example 43",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-44",
+      "description": "Unrelated pharmacy example 44",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-45",
+      "description": "Unrelated pharmacy example 45",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-46",
+      "description": "Unrelated pharmacy example 46",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-47",
+      "description": "Unrelated pharmacy example 47",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-48",
+      "description": "Unrelated pharmacy example 48",
+      "category_id": "care"
+    },
+    {
+      "example_id": "noise-49",
+      "description": "Unrelated pharmacy example 49",
+      "category_id": "care"
+    },
+    {
+      "example_id": "dm-review",
+      "description": "EXAMPLE CARE Berlin",
+      "category_id": "care"
+    },
+    {
+      "example_id": "market-review",
+      "description": "PAYPAL MARKETPLACE household food order",
+      "category_id": "food"
+    }
+  ],
+  "cases": [
+    {
+      "id": "lidl",
+      "description": "EXAMPLE GROCERY Berlin",
+      "group": "common",
+      "expected_category_id": "food"
+    },
+    {
+      "id": "dm",
+      "description": "EXAMPLE CARE Hamburg",
+      "group": "common",
+      "expected_category_id": "care",
+      "relevant_example_id": "dm-review"
+    },
+    {
+      "id": "qz",
+      "description": "QZ Services",
+      "group": "unfamiliar",
+      "expected_category_id": "uncategorized"
+    },
+    {
+      "id": "unknown",
+      "description": "XYZ Payment",
+      "group": "unfamiliar",
+      "expected_category_id": "uncategorized"
+    },
+    {
+      "id": "own",
+      "description": "Umbuchung eigenes Konto",
+      "group": "transfer",
+      "expected_category_id": "transfer"
+    },
+    {
+      "id": "alex",
+      "description": "Überweisung Alex",
+      "group": "transfer",
+      "expected_category_id": "uncategorized"
+    },
+    {
+      "id": "market",
+      "description": "PAYPAL MARKETPLACE household food order",
+      "group": "correction",
+      "expected_category_id": "food",
+      "relevant_example_id": "market-review"
+    }
+  ]
+}

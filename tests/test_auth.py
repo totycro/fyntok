@@ -121,3 +121,16 @@ def test_code_exchange_validates_signed_identity_before_saving(tmp_path, monkeyp
     else:
         session.complete(callback)
         assert ChatGPTSession(tmp_path).access_token() == 'signed-in-access'
+
+
+@pytest.mark.parametrize('code', ['invalid_grant', 'refresh_token_reused', 'invalid_client', None])
+def test_refresh_failure_clears_only_terminal_tokens_keeps_registration(tmp_path, monkeypatch, code):
+    session = ChatGPTSession(tmp_path)
+    record(session)
+    monkeypatch.setattr(httpx, 'post', lambda *a, **k: httpx.Response(400 if code else 503,
+        json={'error': code} if code else {'detail': 'Temporary failure'}))
+    with pytest.raises(RuntimeError):
+        session.access_token()
+    saved = session.load()['accounts']['issued-client']
+    assert saved['client_id'] == 'issued-client' and saved['subject'] == 'person'
+    assert ('refresh_token' in saved) == (code not in {'invalid_grant', 'refresh_token_reused'})

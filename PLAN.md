@@ -77,7 +77,7 @@ The [categorization experiment](experiments/categorization/README.md) supports c
 
 Implement these milestones in order, using each completed milestone as a working checkpoint. Update each status as work progresses: **Not started**, **In progress**, **Blocked** (with the reason), or **Complete**. Record completed work, remaining work, and validation results here so implementation can continue across context windows. Mark a milestone complete only after its completion criteria are verified.
 
-The retained categorization experiment and application milestones 1–3 are complete. Milestone 4 has not started. Reuse its validated parsing and integration code where appropriate; production integration and application behavior still require implementation and validation.
+The retained categorization experiment and application milestones 1–3 are complete. Milestone 4 reliability implementation is finished; human-reviewed live accuracy evaluation remains open. Reuse its validated parsing and integration code where appropriate; production integration and application behavior still require implementation and validation.
 
 ### Milestone 1: Data and persistence
 
@@ -149,7 +149,7 @@ Remaining work is milestone 4: cancellation/resume and interrupted-process recov
 
 ### Milestone 4: Run reliability and validation
 
-**Status: Not started**
+**Status: In progress** — reliability implementation and regression validation complete; human-reviewed live accuracy evaluation pending.
 
 - Complete cancellation and resume behavior using persisted run progress, preserving completed work without duplicate application.
 - Verify transaction and category edits during runs, including protection against applying stale results and correct undo behavior.
@@ -158,6 +158,18 @@ Remaining work is milestone 4: cancellation/resume and interrupted-process recov
 - Document local setup, operation, recovery, and remaining limitations.
 
 **Completion criteria:** Reliability and regression checks pass, recovery behavior is documented, and the reviewed-sample evaluation records results and remaining limitations. All validation requirements below have been addressed, with any unmet acceptance criteria explicitly recorded rather than marked complete.
+
+Implemented October 8, 2026:
+
+- Added durable cancellation for pending/running runs and browser controls to select, cancel, resume, or recover any saved run. An in-flight response is discarded after cancellation; committed batches remain applied. Resume preserves original scope/model/category/example/revision snapshots and retries only unfinished items, leaving applied/skipped items and assignment IDs intact. Undo after a completed batch is never replayed by resume.
+- Added a nonblocking Unix worker lock per database, held across recovery and execution. Live workers cannot be recovered from another thread/process; process death releases the lock. Recovering an abandoned running item increments its attempt count and retries it without duplicating completed assignments. Cancellation permits abandoning an interrupted run before starting fresh.
+- Added safe HTTP and streamed error handling for sessions, permission/eligibility, subscription limits, unsupported requests, and temporary routing failures. Requests stop with completed work retained and no automatic retries or billing fallback. Known error codes and statuses produce actionable recovery messages; raw server messages are omitted to avoid persisting private inputs. Terminal refresh-token failures clear unusable tokens while retaining registration; temporary failures preserve credentials.
+- Added regression checks for in-flight/between-batch/pending cancellation, actual process death, worker exclusion across threads/processes, failed-run resume, concurrent transaction/category edits (rename/merge/delete), manual protection, undo during work, and undo before resume. NiceGUI simulation verifies cancellation and recovery after page reload and stable status after sign-out.
+- Added `evaluations/sample.json`, a held-out synthetic candidate sample covering common merchants, unfamiliar descriptions, own-account/ambiguous transfers, and a correction preference. Added `python -m fyntok.evaluation` for paired baseline/example-guided inference with per-group scores, retrieval IDs, observed baseline disagreements, and correction outcomes. The harness requires a recorded human reviewer and rejects held-out ID leakage. Its scripted test verifies scoring and retrieval of older relevant examples behind 50 distractors; scripted scores are not live model accuracy.
+- Updated README.md with setup, cancellation timing, recovery operation, unchanged snapshots on resume, local SQLite/Unix lock requirements, session/usage failure recovery, and remaining limitations. Recorded the accuracy-evaluation protocol and outstanding evidence in [evaluations/REPORT.md](evaluations/REPORT.md).
+- Validation: `uv run --locked pytest -q` passed **79 tests**, including the existing data/acceptance checks, a forced child-process exit mid-run, HTTP/streamed session and subscription failures, refresh-token failure cases, and three NiceGUI workflows. `git diff --check` passed. Tests use temporary databases, scripted advisors, and mock transports; no new live sign-in/inference or visual browser inspection was performed.
+
+**Unmet acceptance criterion:** A person must review and confirm the candidate sample/category labels, then the paired evaluation must run through an account-supported live model and record actual accuracy, retrieval, and correction results. The candidate fixture deliberately has no reviewer; user review was requested during implementation. No human labels or live results are fabricated. The retained experiment does not cover the required unfamiliar/ambiguous cases or a correction differing from the model baseline. Milestone 4 therefore remains In progress, rather than Complete, until that evidence is recorded. Credentials/worker locks remain Unix-only and description minimization/example relevance remain heuristic.
 
 ## Validation
 

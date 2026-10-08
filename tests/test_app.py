@@ -141,3 +141,41 @@ def test_ai_ui_proposals_model_selection_and_recalculation(tmp_path, caplog):
         assert not [r for r in caplog.records if r.levelname == 'ERROR']
     finally:
         engine.dispose()
+
+
+def test_ui_cancel_and_recover_after_reload(tmp_path, caplog):
+    from fyntok.categorization import cancel_run, start_run
+    engine = open_database(tmp_path / 'recover-ui.sqlite3')
+    import_content(engine, b'a;EXAMPLE GROCERY;01.01.2024;01.01.2024;-10,00;EUR\n', 'bank.csv')
+    auth = ChatGPTSession(tmp_path / 'credentials')
+    run_id = start_run(engine, 'saved-model')
+    class Advisor:
+        def classify(self, model, payload):
+            assert model == 'saved-model'
+            cancel_run(engine, run_id)
+            return {'assignments': [dict(transaction_id=t['transaction_id'], category_id='uncategorized', reason='Unclear') for t in payload['transactions']]}
+    async def scenario():
+        async with user_simulation(lambda: build_page(engine, Advisor(), auth)) as user:
+            await user.open('/')
+            await user.should_see('Pending: 0 applied')
+            user.find('Cancel selected run').click()
+            await user.should_see('Cancelled: 0 applied')
+        class Recovered(Advisor):
+            def classify(self, model, payload):
+                assert model == 'saved-model'
+                return {'assignments': [dict(transaction_id=t['transaction_id'], category_id='uncategorized', reason='Unclear') for t in payload['transactions']]}
+        async with user_simulation(lambda: build_page(engine, Recovered(), auth)) as user:
+            await user.open('/')
+            await user.should_see('Cancelled: 0 applied')
+            user.find('Resume / recover selected run').click()
+            await user.should_see('Completed: 1 applied')
+            # Polling completed history must leave sign-out status visible.
+            user.find('Sign out').click()
+            await user.should_see('Signed out.')
+            await asyncio.sleep(0.6)
+            await user.should_see('Signed out.')
+    try:
+        asyncio.run(scenario())
+        assert not [r for r in caplog.records if r.levelname == 'ERROR']
+    finally:
+        engine.dispose()
