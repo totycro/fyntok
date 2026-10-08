@@ -35,6 +35,7 @@ def build_page(engine, ai_client=None, auth=None):
         ui.label('Headerless CP1252 CSV; semicolon separators and German dates/amounts. Repeated exports reuse existing rows.')
 
         async def upload(event):
+            logger.debug('Import CSV: reading upload and importing transactions')
             try:
                 result = await run.io_bound(import_content, engine, await event.file.read(), event.file.name)
                 logger.info('CSV import completed: %d new transactions, %d duplicates',
@@ -53,8 +54,12 @@ def build_page(engine, ai_client=None, auth=None):
         currency = ui.select([], label='Currency', clearable=True).classes('w-28')
         merchant = ui.select([], label='Merchant', clearable=True, with_input=True).classes('w-64')
         search = ui.input('Description contains').classes('w-64')
-        ui.button('Apply filters', on_click=lambda: content.refresh())
+        def apply_filters():
+            logger.debug('Apply filters: refreshing analysis and transactions')
+            content.refresh()
+        ui.button('Apply filters', on_click=apply_filters)
         def clear():
+            logger.debug('Clear filters: resetting filters and refreshing results')
             for control in (start, end, category_filter, source, currency, merchant, search):
                 control.value = None
             content.refresh()
@@ -86,19 +91,26 @@ def build_page(engine, ai_client=None, auth=None):
         currency.update()
         content.refresh()
 
-    def perform(action, dialog):
+    def perform(action, dialog, label):
+        logger.debug('%s: saving changes', label)
         try:
             action()
         except (ValueError, SQLAlchemyError) as exc:
-            logger.warning('Manual action failed (%s)', type(exc).__name__)
+            logger.warning('%s failed (%s)', label, type(exc).__name__)
             ui.notify(str(exc), type='negative')
             return
         dialog.close()
         dialog.delete()
-        logger.info('Manual action completed')
+        logger.info('%s: completed', label)
         refresh()
 
+    def close_dialog(dialog, label):
+        logger.debug('%s: closing dialog', label)
+        dialog.close()
+
     def category_editor(category=None):
+        label = 'Edit category' if category else 'Create category'
+        logger.debug('%s: opening editor', label)
         with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl'):
             ui.label('Edit category' if category else 'Create category').classes('text-xl')
             name = ui.input('Name', value=category['name'] if category else '').classes('w-full')
@@ -110,12 +122,14 @@ def build_page(engine, ai_client=None, auth=None):
             ui.button('Save', on_click=lambda: perform(lambda: save_category(
                 engine, name.value or '', definition.value or '', kind.value,
                 category_id=category['id'] if category else None,
-                expected_revision=category['revision'] if category else None), dialog))
-            ui.button('Cancel', on_click=dialog.close).props('flat')
+                expected_revision=category['revision'] if category else None), dialog, label))
+            ui.button('Cancel', on_click=lambda: close_dialog(dialog, f'Cancel {label.lower()}')).props('flat')
         dialog.on('hide', dialog.delete)
         dialog.open()
 
     def category_removal(category, merging):
+        label = 'Merge category' if merging else 'Delete category'
+        logger.debug('%s: opening destination selector', label)
         options = {c['id']: c['name'] for c in categories(engine) if c['id'] != category['id']}
         if merging:
             options.pop('uncategorized', None)
@@ -124,12 +138,13 @@ def build_page(engine, ai_client=None, auth=None):
             ui.label('Current assignments and confirmed examples move to the destination. Previous assignments remain in history.')
             destination = ui.select(options, label='Destination', value=None if merging else 'uncategorized').classes('w-full')
             ui.button('Merge category' if merging else 'Delete category', on_click=lambda: perform(
-                lambda: remove_category(engine, category['id'], destination.value, expected_revision=category['revision']), dialog))
-            ui.button('Cancel', on_click=dialog.close).props('flat')
+                lambda: remove_category(engine, category['id'], destination.value, expected_revision=category['revision']), dialog, label))
+            ui.button('Cancel', on_click=lambda: close_dialog(dialog, f'Cancel {label.lower()}')).props('flat')
         dialog.on('hide', dialog.delete)
         dialog.open()
 
     def transaction_editor(row):
+        logger.debug('Transaction details: opening editor and assignment history')
         with ui.dialog() as dialog, ui.card().classes('w-full max-w-4xl'):
             ui.label('Transaction details').classes('text-xl')
             ui.label(row['description']).classes('whitespace-pre-wrap')
@@ -139,10 +154,10 @@ def build_page(engine, ai_client=None, auth=None):
             ui.label('Saving confirms only this transaction and replaces its previous confirmed example.')
             with ui.row():
                 ui.button('Confirm individual category', on_click=lambda: perform(lambda: correct_transaction(
-                    engine, row['id'], selection.value, expected_revision=row['revision']), dialog))
+                    engine, row['id'], selection.value, expected_revision=row['revision']), dialog, 'Confirm individual category'))
                 ui.button('Undo latest assignment change', on_click=lambda: perform(lambda: undo_assignment(
-                    engine, row['id'], expected_revision=row['revision']), dialog)).props('outline')
-                ui.button('Close', on_click=dialog.close).props('flat')
+                    engine, row['id'], expected_revision=row['revision']), dialog, 'Undo latest assignment change')).props('outline')
+                ui.button('Close', on_click=lambda: close_dialog(dialog, 'Close transaction details')).props('flat')
             ui.label('Assignment history').classes('text-lg')
             history = assignment_history(engine, row['id'])
             ui.table(columns=columns('created_at', 'category', 'source', 'protected', 'active', 'reason'),
@@ -152,6 +167,10 @@ def build_page(engine, ai_client=None, auth=None):
 
     selected_tab = {'value': 'Analysis'}
 
+    def select_tab(event):
+        logger.debug('Select tab: %s', event.value)
+        selected_tab['value'] = event.value
+
     @ui.refreshable
     def content():
         try:
@@ -160,11 +179,13 @@ def build_page(engine, ai_client=None, auth=None):
             monthly = aggregate(engine, filters=f)
             summaries = aggregate(engine, by='merchant', filters=f)
         except ValueError as exc:
+            logger.debug('Refresh results: invalid filters (%s)', type(exc).__name__)
             ui.label(str(exc)).classes('text-red-700')
             return
+        logger.debug('Refresh results: displaying %d matching transactions', len(rows))
         ui.label(f'{len(rows):,} matching transactions').classes('text-xl')
         ui.label('Spending is positive; income, internal transfers and Uncategorized are separate. Transfers and Uncategorized show signed net values. Currencies are separate series.')
-        with ui.tabs(value=selected_tab['value'], on_change=lambda e: selected_tab.update(value=e.value)).classes('w-full') as tabs:
+        with ui.tabs(value=selected_tab['value'], on_change=select_tab).classes('w-full') as tabs:
             dashboard = ui.tab('Analysis')
             transactions = ui.tab('Transactions')
             category_tab = ui.tab('Categories')

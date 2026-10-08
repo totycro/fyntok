@@ -1,5 +1,6 @@
 """Exercise real NiceGUI callbacks through its built-in user simulator."""
 import asyncio
+import logging
 
 from nicegui import ui
 from nicegui.testing.user_simulation import user_simulation
@@ -13,6 +14,7 @@ from fyntok.queries import transaction_rows
 
 
 def test_manual_ui_workflow(tmp_path, caplog):
+    caplog.set_level(logging.DEBUG, logger='fyntok')
     engine = open_database(tmp_path / 'ui.sqlite3')
 
     async def scenario():
@@ -86,6 +88,11 @@ def test_manual_ui_workflow(tmp_path, caplog):
             assert [c['name'] for c in categories(engine)] == ['Uncategorized']
     try:
         asyncio.run(scenario())
+        for action in ('Create category', 'Edit category', 'Merge category', 'Delete category',
+                       'Confirm individual category', 'Undo latest assignment change'):
+            assert f'{action}: completed' in caplog.text
+        assert 'Apply filters: refreshing' in caplog.text
+        assert 'Clear filters: resetting' in caplog.text
         assert not [r for r in caplog.records if r.levelname == 'ERROR']
     finally:
         engine.dispose()
@@ -94,6 +101,7 @@ def test_manual_ui_workflow(tmp_path, caplog):
 def test_ai_ui_proposals_model_selection_and_recalculation(tmp_path, caplog):
     """A person connects their plan, edits and approves a suggestion, and reviews AI assignments."""
     from fyntok.auth import ChatGPTSession
+    caplog.set_level(logging.DEBUG, logger='fyntok')
     engine = open_database(tmp_path / 'ai-ui.sqlite3')
     import_content(engine, b'a;EXAMPLE GROCERY;01.01.2024;01.01.2024;-10,00;EUR\n', 'bank.csv')
     auth = ChatGPTSession(tmp_path / 'credentials')
@@ -110,6 +118,7 @@ def test_ai_ui_proposals_model_selection_and_recalculation(tmp_path, caplog):
             return [dict(slug='story-model', display_name='Story model')]
 
         def propose(self, model, payload):
+            assert 'Propose categories: preparing descriptions and requesting AI suggestions' in caplog.text
             assert model == 'story-model'
             return {'categories': [dict(name='Groceries', definition='Food at supermarkets', kind='spending')]}
 
@@ -121,6 +130,9 @@ def test_ai_ui_proposals_model_selection_and_recalculation(tmp_path, caplog):
     async def scenario():
         async with user_simulation(lambda: build_page(engine, Advisor(), auth)) as user:
             await user.open('/')
+            user.find('Propose categories').click()
+            await user.should_see('Choose a model and wait for current AI work to finish.')
+            assert 'Propose categories: blocked; busy=False, model selected=False' in caplog.text
             user.find(kind=ui.button, content='Load models').click()
             await user.should_see('ChatGPT plan connected.')
             user.find('Propose categories').click()
@@ -138,7 +150,44 @@ def test_ai_ui_proposals_model_selection_and_recalculation(tmp_path, caplog):
             await user.should_see('Signed out.')
     try:
         asyncio.run(scenario())
+        assert 'Load models: completed with 1 available models' in caplog.text
+        assert 'Propose categories: completed with 1 suggestions' in caplog.text
+        assert 'Approve category: completed' in caplog.text
+        assert 'Recalculate categories — all transactions: saved run' in caplog.text
+        assert 'Categorization run progress: status=completed' in caplog.text
+        assert 'Sign out: completed' in caplog.text
+        assert 'person@example.com' not in caplog.text
         assert not [r for r in caplog.records if r.levelname == 'ERROR']
+    finally:
+        engine.dispose()
+
+
+def test_proposal_failure_is_logged_without_private_error_details(tmp_path, caplog):
+    caplog.set_level(logging.DEBUG, logger='fyntok')
+    engine = open_database(tmp_path / 'failed-proposal.sqlite3')
+
+    class Advisor:
+        def models(self):
+            return [dict(slug='test-model', display_name='Test model')]
+
+        def propose(self, model, payload):
+            raise RuntimeError('private response body and credentials')
+
+    async def scenario():
+        async with user_simulation(lambda: build_page(
+                engine, Advisor(), ChatGPTSession(tmp_path / 'credentials'))) as user:
+            await user.open('/')
+            user.find(kind=ui.button, content='Load models').click()
+            await user.should_see('ChatGPT plan connected.')
+            user.find('Propose categories').click()
+            await user.should_see('Category suggestions unavailable (RuntimeError).')
+
+    try:
+        asyncio.run(scenario())
+        assert 'Propose categories: requested' in caplog.text
+        assert 'Propose categories failed (RuntimeError)' in caplog.text
+        assert 'Propose categories: completed' not in caplog.text
+        assert 'private response body and credentials' not in caplog.text
     finally:
         engine.dispose()
 
