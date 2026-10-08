@@ -77,7 +77,7 @@ The [categorization experiment](experiments/categorization/README.md) supports c
 
 Implement these milestones in order, using each completed milestone as a working checkpoint. Update each status as work progresses: **Not started**, **In progress**, **Blocked** (with the reason), or **Complete**. Record completed work, remaining work, and validation results here so implementation can continue across context windows. Mark a milestone complete only after its completion criteria are verified.
 
-The retained categorization experiment and application milestone 1 are complete. Milestones 2–4 have not started. Reuse its validated parsing and integration code where appropriate; production integration and application behavior still require implementation and validation.
+The retained categorization experiment and application milestones 1–2 are complete. Milestones 3–4 have not started. Reuse its validated parsing and integration code where appropriate; production integration and application behavior still require implementation and validation.
 
 ### Milestone 1: Data and persistence
 
@@ -99,12 +99,12 @@ Completed October 8, 2026:
 - Verified persistent import, repeat-import deduplication, and monthly totals against an independent CSV calculation. Private financial totals and date ranges are omitted.
 - Validation: `uv sync --locked` succeeded on Python 3.14.4; `uv run --locked pytest -q` passed **13 tests** including every supplied row, both dates, every monthly total against an independent CSV calculation, exact totals, reopen/repeat behavior, malformed import rollback, duplicate/overlap behavior, currencies and financial buckets, active assignment uniqueness, history/examples, durable run progress, and unknown schema refusal. Private-data checks skip explicitly if the supplied CSV is absent.
 
-Remaining work: milestones 2–4, including manual assignment/category services and UI, AI integration, and actual run application/cancellation/resume behavior. This milestone establishes their persistent schema; it does not implement those later workflows.
+Remaining work at this checkpoint was milestones 2–4. Milestone 2 is now complete below; AI integration and actual run application/cancellation/resume behavior remain for milestones 3–4.
 
 
 ### Milestone 2: Manual application
 
-**Status: Not started**
+**Status: Complete**
 
 - Build the localhost NiceGUI application with Plotly charts, merchant summaries, and a filterable transaction table.
 - Implement category creation, definitions, rename, merge, and deletion with destination selection or Uncategorized.
@@ -112,6 +112,17 @@ Remaining work: milestones 2–4, including manual assignment/category services 
 - Show assignment source and history, and implement undo for assignment changes.
 
 **Completion criteria:** Import, analysis, category management, and individual corrections work without AI access. Verify category lifecycle behavior, protected corrections, replacement of outdated examples, and undo. Do not provide bulk manual categorization or merchant rules.
+
+Completed October 8, 2026:
+
+- Added `fyntok serve` bound to `127.0.0.1`, with browser CSV upload/import history, Plotly monthly amounts/counts and category trends, merchant summaries, and a paginated transaction table. Date, category, merchant, description, source, and currency filters are shared by the table and SQL analysis. Spending displays as positive amounts; income, transfers, Uncategorized, and currencies remain identifiable separately.
+- Added atomic category creation, definitions/type edits, stable-ID renames, merge, and deletion with an explicit destination or Uncategorized. Removed categories are archived to preserve historical foreign keys; active assignments and confirmed examples move to the destination, keeping manual protection. Uncategorized is permanent and archived names remain reserved.
+- Added individual corrections with explicit protection, one latest confirmed example per transaction, assignment source/history, and repeated undo through prior assignments. Undo appends history, restores the prior category/protection/example, and clears the example when returning to AI/unassigned state. Restored AI assignments retain their AI-generated display label. No bulk manual assignment or merchant rules are provided.
+- Added schema version 2 and transactional migration from version 1 for category archives, explicit assignment protection, and undo restoration references. Writes serialize and check editor revisions to reject stale edits. Updated README.md with startup, manual workflows, migration, and current limitations.
+- Validation: `uv run --locked pytest -q` passed **21 tests** (the original 13 plus seven manual-service/migration checks and one end-to-end NiceGUI user-simulation check). Tests cover correction/example replacement, protection, undo to manual/AI/unassigned states, repeated undo and reopen persistence, category lifecycle/history, invalid operations and stale revisions, shared SQL filters, version-1 migration/reopen, and UI upload, create/rename/merge/delete, row correction, undo, and filtering. The simulator also checks for application error logs.
+- Verified CLI server startup and database migration with existing transactions preserved. Private dataset statistics are omitted.
+
+Remaining work: milestones 3–4. Definition changes currently explain that historical AI recalculation comes in milestone 3. Category lifecycle operations have no undo button; individual assignment undo refuses to restore an archived category, requiring an explicit correction to an existing category instead. These boundaries are documented and tested.
 
 ### Milestone 3: AI workflow
 

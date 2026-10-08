@@ -62,10 +62,15 @@ def parse_csv(content: bytes) -> list[dict]:
 def import_csv(engine: Engine, path: str | Path) -> ImportResult:
     path = Path(path)
     content = path.read_bytes()
+    return import_content(engine, content, path.name)
+
+
+def import_content(engine: Engine, content: bytes, filename: str) -> ImportResult:
+    """Import uploaded bytes with the same atomic behavior as a local file."""
     rows = parse_csv(content)  # Validate the entire file before writing anything.
     with Session(engine) as session, session.begin():
         existing = {(t.row_sha256, t.occurrence): t.id for t in session.scalars(select(Transaction))}
-        record = Import(filename=path.name, sha256=hashlib.sha256(content).hexdigest(),
+        record = Import(filename=Path(filename).name, sha256=hashlib.sha256(content).hexdigest(),
                         original_bytes=content, row_count=len(rows), inserted_count=0, duplicate_count=0)
         session.add(record)
         session.flush()

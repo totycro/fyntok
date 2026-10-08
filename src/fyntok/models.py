@@ -1,4 +1,4 @@
-"""Schema v1. Amounts are signed integer cents; IDs survive category renames."""
+"""Schema v2. Amounts are signed integer cents; IDs survive category renames."""
 from datetime import date, datetime, timezone
 from uuid import uuid4
 
@@ -33,6 +33,7 @@ class Category(Base):
     definition: Mapped[str] = mapped_column(Text, default="")
     kind: Mapped[str] = mapped_column(default="spending")
     revision: Mapped[int] = mapped_column(default=0)
+    archived: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     __table_args__ = (CheckConstraint("kind IN ('spending','income','transfer','uncategorized')"),)
 
@@ -99,15 +100,19 @@ class Assignment(Base):
     category_id: Mapped[str] = mapped_column(ForeignKey("categories.id"))
     source: Mapped[str]
     active: Mapped[bool] = mapped_column(default=True)
+    protected: Mapped[bool] = mapped_column(default=False)
     reason: Mapped[str] = mapped_column(Text, default="")
     run_id: Mapped[str | None] = mapped_column(ForeignKey("categorization_runs.id"))
     previous_assignment_id: Mapped[str | None]
+    restored_assignment_id: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     __table_args__ = (
         CheckConstraint("source IN ('manual','ai','system','undo')"),
         UniqueConstraint("id", "transaction_id"),
         UniqueConstraint("id", "transaction_id", "category_id"),
         ForeignKeyConstraint(["previous_assignment_id", "transaction_id"],
+                             ["assignments.id", "assignments.transaction_id"]),
+        ForeignKeyConstraint(["restored_assignment_id", "transaction_id"],
                              ["assignments.id", "assignments.transaction_id"]),
         Index("one_active_assignment", "transaction_id", unique=True, sqlite_where=text("active = 1")),
     )

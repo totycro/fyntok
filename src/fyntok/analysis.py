@@ -6,11 +6,13 @@ from sqlalchemy import and_, case, func, select
 from sqlalchemy.engine import Engine
 
 from .models import Assignment, Category, Transaction
+from .queries import Filters
 
 
 def aggregate(engine: Engine, *, by: Literal['monthly', 'trends', 'merchant'] = 'monthly',
               start: date | None = None, end: date | None = None,
-              category_id: str | None = None, merchant: str | None = None) -> list[dict]:
+              category_id: str | None = None, merchant: str | None = None,
+              filters: Filters | None = None) -> list[dict]:
     """Monthly category totals are also the category trend series.
 
     Unassigned rows stay uncategorized regardless of sign. Assigned transfer
@@ -46,6 +48,8 @@ def aggregate(engine: Engine, *, by: Literal['monthly', 'trends', 'merchant'] = 
         query = query.where(category == category_id)
     if merchant is not None:
         query = query.where(t.merchant == merchant)
+    if filters is not None:
+        query = filters.apply(query)
     query = query.group_by(*dimensions).order_by(*dimensions)
     with engine.connect() as connection:
         return [dict(row) for row in connection.execute(query).mappings()]
