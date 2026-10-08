@@ -1,0 +1,96 @@
+{
+  "synthetic": true,
+  "parsed_row_count": 7,
+  "categories": [
+    {
+      "id": "groceries",
+      "name": "Groceries",
+      "definition": "Supermarket and food purchases for use at home."
+    },
+    {
+      "id": "personal_care",
+      "name": "Personal care",
+      "definition": "Drugstore, toiletries, cosmetics and personal hygiene purchases."
+    },
+    {
+      "id": "shopping",
+      "name": "Shopping",
+      "definition": "General retail and online purchases other than groceries or personal care."
+    },
+    {
+      "id": "dining",
+      "name": "Dining",
+      "definition": "Restaurants, cafes and food prepared to eat out."
+    },
+    {
+      "id": "uncategorized",
+      "name": "Uncategorized",
+      "definition": "Insufficient information to select another category."
+    }
+  ],
+  "transactions": [
+    {
+      "transaction_id": "synthetic-1",
+      "description": "EXAMPLE GROCERY / DEMO TOWN 1",
+      "booking_date": "2024-01-01",
+      "value_date": "2024-01-01",
+      "amount_cents": -1100,
+      "currency": "EUR",
+      "merchant_group": "EXAMPLE GROCERY"
+    },
+    {
+      "transaction_id": "synthetic-2",
+      "description": "EXAMPLE GROCERY / DEMO TOWN 2",
+      "booking_date": "2024-01-02",
+      "value_date": "2024-01-02",
+      "amount_cents": -1200,
+      "currency": "EUR",
+      "merchant_group": "EXAMPLE GROCERY"
+    },
+    {
+      "transaction_id": "synthetic-3",
+      "description": "EXAMPLE GROCERY / DEMO TOWN 3",
+      "booking_date": "2024-01-03",
+      "value_date": "2024-01-03",
+      "amount_cents": -1300,
+      "currency": "EUR",
+      "merchant_group": "EXAMPLE GROCERY"
+    },
+    {
+      "transaction_id": "synthetic-4",
+      "description": "EXAMPLE FOODS / DEMO TOWN 4",
+      "booking_date": "2024-01-04",
+      "value_date": "2024-01-04",
+      "amount_cents": -1400,
+      "currency": "EUR",
+      "merchant_group": "EXAMPLE FOODS"
+    },
+    {
+      "transaction_id": "synthetic-5",
+      "description": "EXAMPLE CARE / DEMO TOWN 5",
+      "booking_date": "2024-01-05",
+      "value_date": "2024-01-05",
+      "amount_cents": -1500,
+      "currency": "EUR",
+      "merchant_group": "EXAMPLE CARE"
+    },
+    {
+      "transaction_id": "synthetic-6",
+      "description": "EXAMPLE CARE / DEMO TOWN 6",
+      "booking_date": "2024-01-06",
+      "value_date": "2024-01-06",
+      "amount_cents": -1600,
+      "currency": "EUR",
+      "merchant_group": "EXAMPLE CARE"
+    }
+  ],
+  "examples": [
+    {
+      "example_id": "synthetic-care-example",
+      "transaction_id": "synthetic-7",
+      "description": "EXAMPLE CARE / DEMO TOWN 7",
+      "category_id": "personal_care"
+    }
+  ],
+  "example_provenance": "Synthetic demonstration data only; no private CSV rows or human decisions are represented."
+}
