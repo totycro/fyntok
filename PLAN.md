@@ -69,13 +69,61 @@ The user does not need to select all supermarket transactions or create a mercha
 - Keep AI integration behind a small replaceable Python interface. Use the regular Responses API for both category proposals and classification in this version.
 - Do not automatically switch to separately billed API access. Manual import, editing, and analysis remain available when AI access is unavailable.
 
-## Completed categorization experiment
+## Categorization experiment
 
-On October 8, 2026, the [retained uv experiment](experiments/categorization/README.md) parsed the supplied [private row count omitted]-row CSV and compared categorization with and without a held-out example. It tested an illustrative EXAMPLE GROCERY → Groceries example and the user's confirmed EXAMPLE CARE → Personal care preference, with two repetitions per condition. Exact requests, streamed responses, fixtures, validation code, and results are retained for reuse in implementation.
+The [categorization experiment](experiments/categorization/README.md) supports comparisons with and without examples. Published fixtures contain synthetic data only. Private live requests, responses, and reports are excluded from public history. Synthetic fixtures are demonstrations, not evidence of model accuracy.
 
-All 16 live requests completed through the user's ChatGPT-plan OAuth connection with valid structured output: eight using `gpt-6.1-sol` and eight using `gpt-6-luna`. Both models assigned EXAMPLE GROCERY and EXAMPLE FOODS to Groceries and EXAMPLE CARE to Personal care. Luna matched Sol on all 52 paired assignments across seven distinct target transactions. Mean observed response time was 6.87 seconds for Luna versus 9.28 seconds for Sol; timings were not a controlled benchmark. See the [categorization report](experiments/categorization/REPORT.md) and [model comparison](experiments/categorization/MODEL_COMPARISON.md).
+## Implementation milestones and status
 
-Luna is a suitable starting model for these straightforward categorization cases; retain the account-supported model selector. Adding examples did not change categories because their labels already matched baseline assignments. This experiment verifies the API integration and example input format, but does not establish accuracy on ambiguous transactions, correction of a wrong assignment, or example retrieval at scale. Evaluate those cases against human-reviewed transactions during implementation.
+Implement these milestones in order, using each completed milestone as a working checkpoint. Update each status as work progresses: **Not started**, **In progress**, **Blocked** (with the reason), or **Complete**. Record completed work, remaining work, and validation results here so implementation can continue across context windows. Mark a milestone complete only after its completion criteria are verified.
+
+The retained categorization experiment is complete, but the application milestones below have not started. Reuse its validated parsing and integration code where appropriate; production integration and application behavior still require implementation and validation.
+
+### Milestone 1: Data and persistence
+
+**Status: Not started**
+
+- Set up the Python 3.14 application with `uv`, exact direct dependency versions, and a committed lockfile.
+- Implement the SQLAlchemy/SQLite schema for transactions, stable categories, active and previous assignments, human-confirmed examples, imports, and categorization runs.
+- Import the supplied CSV while preserving original data, both dates, and integer-cent amounts; record import history and define repeat-import behavior.
+- Implement deterministic SQL aggregation for monthly totals and counts, trends, and merchant summaries, with spending, income, internal transfers, and uncategorized transactions represented separately.
+
+**Completion criteria:** The supplied dataset imports into persistent storage; exact totals, date parsing, monthly aggregation, and reload behavior pass automated checks. The schema supports assignment history and durable run progress required by later milestones.
+
+### Milestone 2: Manual application
+
+**Status: Not started**
+
+- Build the localhost NiceGUI application with Plotly charts, merchant summaries, and a filterable transaction table.
+- Implement category creation, definitions, rename, merge, and deletion with destination selection or Uncategorized.
+- Allow individual transaction corrections, protect manual assignments, and maintain the latest human-confirmed example for each corrected transaction.
+- Show assignment source and history, and implement undo for assignment changes.
+
+**Completion criteria:** Import, analysis, category management, and individual corrections work without AI access. Verify category lifecycle behavior, protected corrections, replacement of outdated examples, and undo. Do not provide bulk manual categorization or merchant rules.
+
+### Milestone 3: AI workflow
+
+**Status: Not started**
+
+- Adapt the retained experiment behind a small replaceable Python interface, with supported ChatGPT sign-in, persistent registration, protected credentials, token refresh, sign-out, model discovery, and model selection.
+- Implement category proposals from representative descriptions, requiring user approval before adding categories.
+- Implement initial categorization and recalculation for all transactions or the current filtered selection, using current definitions and relevant latest human-confirmed examples.
+- Minimize request data, follow subscription request requirements, validate structured responses, and automatically apply valid assignments to eligible transactions while preserving manual corrections and assignment history.
+- Run AI work asynchronously with visible progress and persist completed work for the reliability milestone.
+
+**Completion criteria:** The application supports sign-in, approved category proposals, and whole-dataset or filtered recalculation. Verify the supermarket correction interaction, example use for new imports and repeated reprocessing, replacement of changed examples, and exclusion of manual assignments and intervening user edits from automatic application. Manual workflows remain available when AI access is unavailable.
+
+### Milestone 4: Run reliability and validation
+
+**Status: Not started**
+
+- Complete cancellation and resume behavior using persisted run progress, preserving completed work without duplicate application.
+- Verify transaction and category edits during runs, including protection against applying stale results and correct undo behavior.
+- Exercise interrupted streams, malformed output, unknown category IDs, expired sessions, token refresh, sign-out, and subscription limits without losing imported data or silently switching to API billing.
+- Evaluate categorization and example retrieval against a manually reviewed sample covering common merchants, unfamiliar descriptions, ambiguous transfers, and corrections that differ from the model's baseline assignment.
+- Document local setup, operation, recovery, and remaining limitations.
+
+**Completion criteria:** Reliability and regression checks pass, recovery behavior is documented, and the reviewed-sample evaluation records results and remaining limitations. All validation requirements below have been addressed, with any unmet acceptance criteria explicitly recorded rather than marked complete.
 
 ## Validation
 
