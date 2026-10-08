@@ -1,6 +1,7 @@
 import argparse
 from dataclasses import asdict
 import json
+import logging
 from pathlib import Path
 
 from .analysis import aggregate
@@ -18,12 +19,19 @@ def main() -> None:
     analysis.add_argument('--by', choices=['monthly', 'trends', 'merchant'], default='monthly')
     serve = commands.add_parser('serve', help='Open the localhost manual application')
     serve.add_argument('--port', type=int, default=8080)
+    serve.add_argument('--log-level', choices=['debug', 'info', 'warning', 'error', 'critical'],
+                       default='info', help='Server logging verbosity (default: info)')
     args = parser.parse_args()
+    if args.command == 'serve':
+        logging.basicConfig(level=logging.WARNING,
+                            format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+        logging.getLogger('fyntok').setLevel(args.log_level.upper())
+        logging.getLogger(__name__).info('Opening database %s', args.database.resolve())
     engine = open_database(args.database)
     try:
         if args.command == 'serve':
             from .app import serve
-            serve(engine, port=args.port)
+            serve(engine, port=args.port, log_level=args.log_level)
             return
         result = asdict(import_csv(engine, args.csv)) if args.command == 'import' else aggregate(engine, by=args.by)
         print(json.dumps(result, ensure_ascii=False, indent=2))

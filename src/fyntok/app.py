@@ -1,5 +1,6 @@
 """Local NiceGUI application; all manual workflows work without AI access."""
 from datetime import date
+import logging
 
 from nicegui import run, ui
 from sqlalchemy import select
@@ -13,6 +14,9 @@ from .manual import (assignment_history, categories, correct_transaction, remove
                      save_category, undo_assignment)
 from .models import Import, Transaction
 from .queries import Filters, transaction_rows
+
+
+logger = logging.getLogger(__name__)
 
 
 def money(cents: int) -> str:
@@ -33,9 +37,12 @@ def build_page(engine, ai_client=None, auth=None):
         async def upload(event):
             try:
                 result = await run.io_bound(import_content, engine, await event.file.read(), event.file.name)
+                logger.info('CSV import completed: %d new transactions, %d duplicates',
+                            result.inserted_count, result.duplicate_count)
                 ui.notify(f'Imported {result.inserted_count} new transactions; {result.duplicate_count} already present.', type='positive')
                 refresh()
             except (ValueError, SQLAlchemyError, UnicodeError) as exc:
+                logger.warning('CSV import failed (%s)', type(exc).__name__)
                 ui.notify(str(exc), type='negative')
         ui.upload(on_upload=upload, auto_upload=True, label='Choose bank export').props('accept=.csv').classes('w-full')
     with ui.row().classes('items-end w-full'):
@@ -83,10 +90,12 @@ def build_page(engine, ai_client=None, auth=None):
         try:
             action()
         except (ValueError, SQLAlchemyError) as exc:
+            logger.warning('Manual action failed (%s)', type(exc).__name__)
             ui.notify(str(exc), type='negative')
             return
         dialog.close()
         dialog.delete()
+        logger.info('Manual action completed')
         refresh()
 
     def category_editor(category=None):
@@ -199,7 +208,7 @@ def build_page(engine, ai_client=None, auth=None):
     refresh()
 
 
-def serve(engine, port: int = 8080):
+def serve(engine, port: int = 8080, log_level: str = 'info'):
     from .auth import ChatGPTSession
     from .ai import ResponsesClient
     auth = ChatGPTSession()
@@ -208,4 +217,12 @@ def serve(engine, port: int = 8080):
     def index():
         with ui.column().classes('w-full max-w-screen-2xl mx-auto p-6'):
             build_page(engine, ai_client, auth)
-    ui.run(host='127.0.0.1', port=port, title='fyntok', reload=False, show=False)
+    logger.info('Starting fyntok at http://127.0.0.1:%d', port)
+    try:
+        ui.run(host='127.0.0.1', port=port, title='fyntok', reload=False, show=False,
+               uvicorn_logging_level=log_level, access_log=True)
+    except Exception:
+        logger.exception('fyntok server failed')
+        raise
+    finally:
+        logger.info('fyntok server stopped')
