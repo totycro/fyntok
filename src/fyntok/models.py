@@ -1,10 +1,27 @@
+# ty: ignore[unsound-assignment]
 """Schema v2. Amounts are signed integer cents; IDs survive category renames."""
-from datetime import date, datetime, timezone
+
+# SQLAlchemy infers mapped_column types from Mapped annotations at runtime.
+# Its generic Any return does not express that declarative typing contract.
+
+from datetime import UTC, date, datetime
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import (
-    JSON, CheckConstraint, Date, DateTime, ForeignKey, ForeignKeyConstraint,
-    Index, Integer, LargeBinary, String, Text, UniqueConstraint, text,
+    JSON,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -14,7 +31,7 @@ def new_id() -> str:
 
 
 def now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
@@ -84,13 +101,15 @@ class CategorizationRun(Base):
     id: Mapped[str] = mapped_column(primary_key=True, default=new_id)
     status: Mapped[str] = mapped_column(default="pending")
     model: Mapped[str]
-    scope: Mapped[dict] = mapped_column(JSON)
-    category_snapshot: Mapped[list[dict]] = mapped_column(JSON)
-    example_snapshot: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    scope: Mapped[dict[str, Any]] = mapped_column(JSON)
+    category_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
+    example_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
     error: Mapped[str | None] = mapped_column(Text)
-    __table_args__ = (CheckConstraint("status IN ('pending','running','cancelled','failed','completed')"),)
+    __table_args__ = (
+        CheckConstraint("status IN ('pending','running','cancelled','failed','completed')"),
+    )
 
 
 class Assignment(Base):
@@ -110,11 +129,17 @@ class Assignment(Base):
         CheckConstraint("source IN ('manual','ai','system','undo')"),
         UniqueConstraint("id", "transaction_id"),
         UniqueConstraint("id", "transaction_id", "category_id"),
-        ForeignKeyConstraint(["previous_assignment_id", "transaction_id"],
-                             ["assignments.id", "assignments.transaction_id"]),
-        ForeignKeyConstraint(["restored_assignment_id", "transaction_id"],
-                             ["assignments.id", "assignments.transaction_id"]),
-        Index("one_active_assignment", "transaction_id", unique=True, sqlite_where=text("active = 1")),
+        ForeignKeyConstraint(
+            ["previous_assignment_id", "transaction_id"],
+            ["assignments.id", "assignments.transaction_id"],
+        ),
+        ForeignKeyConstraint(
+            ["restored_assignment_id", "transaction_id"],
+            ["assignments.id", "assignments.transaction_id"],
+        ),
+        Index(
+            "one_active_assignment", "transaction_id", unique=True, sqlite_where=text("active = 1")
+        ),
     )
 
 
@@ -124,10 +149,12 @@ class ConfirmedExample(Base):
     assignment_id: Mapped[str]
     category_id: Mapped[str] = mapped_column(ForeignKey("categories.id"))
     confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-    __table_args__ = (ForeignKeyConstraint(
-        ["assignment_id", "transaction_id", "category_id"],
-        ["assignments.id", "assignments.transaction_id", "assignments.category_id"]
-    ),)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["assignment_id", "transaction_id", "category_id"],
+            ["assignments.id", "assignments.transaction_id", "assignments.category_id"],
+        ),
+    )
 
 
 class RunItem(Base):
@@ -137,12 +164,14 @@ class RunItem(Base):
     expected_revision: Mapped[int]
     status: Mapped[str] = mapped_column(default="pending")
     attempts: Mapped[int] = mapped_column(default=0)
-    result: Mapped[dict | None] = mapped_column(JSON)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     error: Mapped[str | None] = mapped_column(Text)
     applied_assignment_id: Mapped[str | None]
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
     __table_args__ = (
         CheckConstraint("status IN ('pending','running','validated','applied','skipped','failed')"),
-        ForeignKeyConstraint(["applied_assignment_id", "transaction_id"],
-                             ["assignments.id", "assignments.transaction_id"]),
+        ForeignKeyConstraint(
+            ["applied_assignment_id", "transaction_id"],
+            ["assignments.id", "assignments.transaction_id"],
+        ),
     )

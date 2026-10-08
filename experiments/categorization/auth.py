@@ -6,13 +6,14 @@ import getpass
 import hashlib
 import json
 import os
-from pathlib import Path
 import secrets
 import tempfile
 import time
-from urllib.parse import parse_qs, urlencode, urlparse
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from typing import Any, override
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
 import jwt
@@ -21,20 +22,20 @@ CONFIG = Path(os.environ.get("FYNTOK_CREDENTIAL_DIR", str(Path.home() / ".fyntok
 CREDENTIALS = CONFIG / "credentials.json"
 PENDING = CONFIG / "pending.json"
 RESOURCE = "https://api.openai.com/v1"
-TOKEN_URL = "https://auth.openai.com/api/accounts/oauth/token"
+TOKEN_URL = "https://auth.openai.com/api/accounts/oauth/token"  # noqa: S105 - OAuth endpoint, no secret.
 REDIRECT = "http://127.0.0.1:1456/auth/callback"
 
 
-def save_private(path: Path, value: dict) -> None:
+def save_private(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, name = tempfile.mkstemp(dir=path.parent)
     try:
         with os.fdopen(fd, "w") as out:
             json.dump(value, out)
-        os.replace(name, path)
+        Path(name).replace(path)
     finally:
-        if os.path.exists(name):
-            os.unlink(name)
+        if Path(name).exists():
+            Path(name).unlink()
 
 
 def begin() -> str:
@@ -54,9 +55,11 @@ def begin() -> str:
         **host,
     }
     save_private(PENDING, pending)
-    challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(pending["code_verifier"].encode()).digest()
-    ).decode().rstrip("=")
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(pending["code_verifier"].encode()).digest())
+        .decode()
+        .rstrip("=")
+    )
     params = {
         "client_id": pending["client_id"] or "dynamic_agent_client",
         "ext_agent_host_id": host["ext_agent_host_id"],
@@ -83,7 +86,10 @@ def complete(callback: str) -> None:
     query = parse_qs(parsed.query)
     if any(len(values) != 1 for values in query.values()):
         raise ValueError("Duplicate callback parameters")
-    value = lambda key: query.get(key, [""])[0]
+
+    def value(key: str) -> str:
+        return query.get(key, [""])[0]
+
     if not secrets.compare_digest(value("state"), pending["state"]):
         raise ValueError("OAuth state mismatch")
     if time.time() - pending["created_at"] > 900:
@@ -101,11 +107,17 @@ def complete(callback: str) -> None:
     pending["client_id"] = client_id
     save_private(PENDING, pending)
     with httpx.Client(timeout=30) as client:
-        response = client.post(TOKEN_URL, data={
-            "grant_type": "authorization_code", "client_id": client_id,
-            "code": value("code"), "code_verifier": pending["code_verifier"],
-            "redirect_uri": pending["redirect_uri"], "resource": RESOURCE,
-        })
+        response = client.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "authorization_code",
+                "client_id": client_id,
+                "code": value("code"),
+                "code_verifier": pending["code_verifier"],
+                "redirect_uri": pending["redirect_uri"],
+                "resource": RESOURCE,
+            },
+        )
         if response.is_error:
             raise RuntimeError(f"Token exchange failed: HTTP {response.status_code}")
         tokens = response.json()
@@ -115,17 +127,27 @@ def complete(callback: str) -> None:
     if metadata["issuer"] != "https://auth.openai.com":
         raise ValueError("Unexpected OIDC issuer")
     key = jwt.PyJWKClient(metadata["jwks_uri"]).get_signing_key_from_jwt(tokens["id_token"])
-    claims = jwt.decode(tokens["id_token"], key.key, algorithms=["RS256"],
-                        audience=client_id, issuer=metadata["issuer"],
-                        options={"require": ["exp", "iss", "aud", "sub", "nonce"]})
+    claims = jwt.decode(
+        tokens["id_token"],
+        key.key,
+        algorithms=["RS256"],
+        audience=client_id,
+        issuer=metadata["issuer"],
+        options={"require": ["exp", "iss", "aud", "sub", "nonce"]},
+    )
     if not secrets.compare_digest(claims["nonce"], pending["nonce"]):
         raise ValueError("OIDC nonce mismatch")
     if pending["subject"] and claims["sub"] != pending["subject"]:
         raise ValueError("Signed-in account changed")
     scopes = tokens.get("scope", "").split()
-    record = {**tokens, "scopes": scopes, "subject": claims["sub"],
-              "client_id": client_id, "ext_agent_host_id": pending["ext_agent_host_id"],
-              "expires_at": time.time() + tokens.get("expires_in", 3600)}
+    record = {
+        **tokens,
+        "scopes": scopes,
+        "subject": claims["sub"],
+        "client_id": client_id,
+        "ext_agent_host_id": pending["ext_agent_host_id"],
+        "expires_at": time.time() + tokens.get("expires_in", 3600),
+    }
     save_private(CREDENTIALS, record)
     PENDING.unlink()
     if "chatgpt.tokens.use.direct" not in scopes:
@@ -140,10 +162,16 @@ def access_token() -> str:
     if "chatgpt.tokens.use.direct" not in record.get("scopes", []):
         raise RuntimeError("ChatGPT plan usage permission is missing")
     if record["expires_at"] < time.time() + 60:
-        response = httpx.post(TOKEN_URL, data={
-            "grant_type": "refresh_token", "client_id": record["client_id"],
-            "refresh_token": record["refresh_token"], "resource": RESOURCE,
-        }, timeout=30)
+        response = httpx.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "refresh_token",
+                "client_id": record["client_id"],
+                "refresh_token": record["refresh_token"],
+                "resource": RESOURCE,
+            },
+            timeout=30,
+        )
         if response.is_error:
             raise RuntimeError(f"Refresh failed: HTTP {response.status_code}; sign in again")
         tokens = response.json()
@@ -154,15 +182,16 @@ def access_token() -> str:
         save_private(CREDENTIALS, record)
         if "chatgpt.tokens.use.direct" not in record["scopes"]:
             raise RuntimeError("ChatGPT plan permission no longer granted")
-    return record["access_token"]
+    return str(record["access_token"])
 
 
 def serve() -> None:
     class Callback(BaseHTTPRequestHandler):
-        def log_message(self, *args):
+        @override
+        def log_message(self, format: str, *args: object) -> None:
             pass  # Never log callback authorization codes.
 
-        def do_GET(self):
+        def do_GET(self) -> None:
             if urlparse(self.path).path != "/auth/callback":
                 self.send_error(404)
                 return

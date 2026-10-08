@@ -11,12 +11,15 @@ PAIRS = [
 ]
 
 
-def main():
+def main() -> None:
     all_runs = {"sol": [], "luna": []}
     comparisons = []
     for scenario, sol_dir, luna_dir in PAIRS:
         directories = {"sol": HERE / "results" / sol_dir, "luna": HERE / "results" / luna_dir}
-        fixtures = {name: json.loads((path / "fixture.json").read_text()) for name, path in directories.items()}
+        fixtures = {
+            name: json.loads((path / "fixture.json").read_text())
+            for name, path in directories.items()
+        }
         if fixtures["sol"] != fixtures["luna"]:
             raise ValueError(f"Fixture mismatch for {scenario}")
         paired = {}
@@ -28,34 +31,56 @@ def main():
             raise ValueError(f"Incomplete paired runs for {scenario}")
         for (repeat, condition), sol_run in paired["sol"].items():
             # Check exact requests differ only in the model name.
-            sol_request = json.loads((directories["sol"] / f"repeat-{repeat}-{condition}.request.json").read_text())
-            luna_request = json.loads((directories["luna"] / f"repeat-{repeat}-{condition}.request.json").read_text())
+            sol_request = json.loads(
+                (directories["sol"] / f"repeat-{repeat}-{condition}.request.json").read_text()
+            )
+            luna_request = json.loads(
+                (directories["luna"] / f"repeat-{repeat}-{condition}.request.json").read_text()
+            )
             del sol_request["model"], luna_request["model"]
             if sol_request != luna_request:
                 raise ValueError(f"Request mismatch for {scenario}/{repeat}/{condition}")
             luna_run = paired["luna"][(repeat, condition)]
-            sol = {a["transaction_id"]: a for a in sol_run["result"]["classification"]["assignments"]}
-            luna = {a["transaction_id"]: a for a in luna_run["result"]["classification"]["assignments"]}
+            sol = {
+                a["transaction_id"]: a for a in sol_run["result"]["classification"]["assignments"]
+            }
+            luna = {
+                a["transaction_id"]: a for a in luna_run["result"]["classification"]["assignments"]
+            }
             if sol.keys() != luna.keys():
                 raise ValueError("Assignment ID mismatch")
             for tid in sol:
-                comparisons.append({"scenario": scenario, "repeat": repeat, "condition": condition,
-                                    "transaction_id": tid, "sol_category": sol[tid]["category_id"],
-                                    "luna_category": luna[tid]["category_id"],
-                                    "agrees": sol[tid]["category_id"] == luna[tid]["category_id"],
-                                    "sol_example_ids_used": sol[tid]["example_ids_used"],
-                                    "luna_example_ids_used": luna[tid]["example_ids_used"]})
+                comparisons.append(
+                    {
+                        "scenario": scenario,
+                        "repeat": repeat,
+                        "condition": condition,
+                        "transaction_id": tid,
+                        "sol_category": sol[tid]["category_id"],
+                        "luna_category": luna[tid]["category_id"],
+                        "agrees": sol[tid]["category_id"] == luna[tid]["category_id"],
+                        "sol_example_ids_used": sol[tid]["example_ids_used"],
+                        "luna_example_ids_used": luna[tid]["example_ids_used"],
+                    }
+                )
     metrics = {}
     for name, runs in all_runs.items():
-        metrics[name] = {"requests": len(runs), "completed": sum(r["result"]["status"] == "completed" for r in runs),
-                         "mean_elapsed_seconds": round(mean(r["result"]["elapsed_seconds"] for r in runs), 2),
-                         "min_elapsed_seconds": min(r["result"]["elapsed_seconds"] for r in runs),
-                         "max_elapsed_seconds": max(r["result"]["elapsed_seconds"] for r in runs),
-                         "input_tokens": sum(r["result"]["usage"]["input_tokens"] for r in runs),
-                         "output_tokens": sum(r["result"]["usage"]["output_tokens"] for r in runs),
-                         "total_tokens": sum(r["result"]["usage"]["total_tokens"] for r in runs)}
-    summary = {"metrics": metrics, "compared_assignments": len(comparisons),
-               "agreeing_assignments": sum(c["agrees"] for c in comparisons), "comparisons": comparisons}
+        metrics[name] = {
+            "requests": len(runs),
+            "completed": sum(r["result"]["status"] == "completed" for r in runs),
+            "mean_elapsed_seconds": round(mean(r["result"]["elapsed_seconds"] for r in runs), 2),
+            "min_elapsed_seconds": min(r["result"]["elapsed_seconds"] for r in runs),
+            "max_elapsed_seconds": max(r["result"]["elapsed_seconds"] for r in runs),
+            "input_tokens": sum(r["result"]["usage"]["input_tokens"] for r in runs),
+            "output_tokens": sum(r["result"]["usage"]["output_tokens"] for r in runs),
+            "total_tokens": sum(r["result"]["usage"]["total_tokens"] for r in runs),
+        }
+    summary = {
+        "metrics": metrics,
+        "compared_assignments": len(comparisons),
+        "agreeing_assignments": sum(c["agrees"] is True for c in comparisons),
+        "comparisons": comparisons,
+    }
     output = HERE / "results/model-comparison.json"
     output.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({k: v for k, v in summary.items() if k != "comparisons"}, indent=2))
