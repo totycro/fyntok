@@ -164,6 +164,8 @@ class ResponsesClient:
             },
         }
         completed = None
+        streamed_text: dict[tuple[int, int], str] = {}
+        refused = False
         account = self.session.active_account()
         with (
             httpx.Client(
@@ -177,6 +179,14 @@ class ResponsesClient:
                 if not line.startswith("data:") or line[5:].strip() == "[DONE]":
                     continue
                 event = json.loads(line[5:])
+                if event.get("type") in {"response.output_text.delta", "response.output_text.done"}:
+                    key = (event["output_index"], event["content_index"])
+                    if event["type"] == "response.output_text.delta":
+                        streamed_text[key] = streamed_text.get(key, "") + event["delta"]
+                    else:
+                        streamed_text[key] = event["text"]
+                if event.get("type") in {"response.refusal.delta", "response.refusal.done"}:
+                    refused = True
                 if event.get("type") in {"response.failed", "response.incomplete", "error"}:
                     error = event.get("response", {}).get("error") or event.get("error") or event
                     raise AIRequestError(
@@ -189,12 +199,24 @@ class ResponsesClient:
         self.session.access_token()  # Reject a result after sign-out.
         if completed is None:
             raise RuntimeError("ChatGPT stream interrupted before completion.")
+        if refused or any(
+            p.get("type") == "refusal"
+            for item in completed.get("output", [])
+            for p in item.get("content", [])
+        ):
+            raise ValueError("ChatGPT declined to provide a result for this request.")
         output = "".join(
             p["text"]
             for item in completed.get("output", [])
             for p in item.get("content", [])
             if p.get("type") == "output_text"
         )
+        # Plan-backed streams can omit output from the completion event even when
+        # earlier text events contain the full result. Never append both copies.
+        if not output:
+            output = "".join(streamed_text[key] for key in sorted(streamed_text))
+        if not output.strip():
+            raise ValueError("ChatGPT completed the request without returning output.")
         try:
             result = json.loads(output)
             if not isinstance(result, dict):
