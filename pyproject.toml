@@ -12,7 +12,11 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest==9.1.1"]
+dev = [
+    "pytest==9.1.1",
+    "ruff>=0.16.10",
+    "ty>=0.0.85",
+]
 
 [project.scripts]
 fyntok = "fyntok.cli:main"
@@ -23,3 +27,27 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+# Correctness, security, modern Python, annotations, and maintainability.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "ANN", "ASYNC", "S", "RET", "ARG", "PTH", "RUF"]
+# Dynamic JSON and third-party UI boundaries may use explicit Any.
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+# Assertions are the test runner's API; fixture bytes are not credentials.
+"**/test_*.py" = ["S101", "S105", "S106"]
+
+[tool.ty.rules]
+all = "error"
+
+[tool.ty.analysis]
+strict-generic-narrowing = true
+strict-equality-semantics = true
+
+[tool.ty.terminal]
+error-on-warning = true
