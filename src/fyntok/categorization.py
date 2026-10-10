@@ -7,6 +7,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from sqlalchemy import select
@@ -307,6 +308,14 @@ def _execute_run(
             raise ValueError("Run is not pending.")
         model, snapshot, examples = run.model, run.category_snapshot, run.example_snapshot
         run.status = "running"
+    logger.debug(
+        "Categorization run %s: starting; model=%s, categories=%d, confirmed examples=%d",
+        run_id,
+        model,
+        len(snapshot),
+        len(examples),
+    )
+    batch_number = 0
     try:
         while True:
             with Session(engine) as session, session.begin():
@@ -339,7 +348,25 @@ def _execute_run(
                 "confirmed_examples": relevant_examples(examples, targets),
                 "transactions": targets,
             }
+            batch_number += 1
+            logger.debug(
+                "Categorization run %s, batch %d: requesting AI assignments; "
+                "transactions=%d, confirmed examples=%d",
+                run_id,
+                batch_number,
+                len(targets),
+                len(payload["confirmed_examples"]),
+            )
+            request_started = monotonic()
             assignments = validate_assignments(client.classify(model, payload), targets, snapshot)
+            logger.debug(
+                "Categorization run %s, batch %d: response validated in %.2fs; assignments=%d",
+                run_id,
+                batch_number,
+                monotonic() - request_started,
+                len(assignments),
+            )
+            applied = skipped = 0
             with Session(engine) as session, session.begin():
                 session.connection().exec_driver_sql("BEGIN IMMEDIATE")
                 if require_record(session.get(CategorizationRun, run_id)).status == "cancelled":
@@ -347,6 +374,11 @@ def _execute_run(
                         select(RunItem).where(RunItem.run_id == run_id, RunItem.status == "running")
                     ):
                         item.status = "pending"
+                    logger.debug(
+                        "Categorization run %s, batch %d: cancelled; discarding response",
+                        run_id,
+                        batch_number,
+                    )
                     break
                 current_categories = [
                     {
@@ -378,14 +410,26 @@ def _execute_run(
                         item.error = (
                             "Categories, confirmed examples, or transaction changed during the run."
                         )
+                        skipped += 1
                         continue
                     assignment = _assign(session, t, result["category_id"], "ai", result["reason"])
                     assignment.run_id = run_id
                     item.applied_assignment_id, item.status = assignment.id, "applied"
+                    applied += 1
+            logger.debug(
+                "Categorization run %s, batch %d: committed; applied=%d, skipped=%d, "
+                "categories changed=%s, confirmed examples changed=%s",
+                run_id,
+                batch_number,
+                applied,
+                skipped,
+                category_changed,
+                examples_changed,
+            )
             if on_progress:
                 on_progress(run_progress(engine, run_id))
     except Exception as exc:
-        logger.exception("Categorization run failed (%s)", type(exc).__name__)
+        logger.exception("Categorization run %s failed (%s)", run_id, type(exc).__name__)
         # No raw transport errors or response bodies are stored: they may contain private data.
         with Session(engine) as session, session.begin():
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
@@ -411,6 +455,15 @@ def _execute_run(
                     run.error,
                 )
     result = run_progress(engine, run_id)
+    logger.debug(
+        "Categorization run %s: finished; status=%s, processed=%d/%d, applied=%d, skipped=%d",
+        run_id,
+        result["status"],
+        result["done"],
+        result["total"],
+        result["applied"],
+        result["skipped"],
+    )
     if on_progress:
         on_progress(result)
     return result
