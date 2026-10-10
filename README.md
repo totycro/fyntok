@@ -15,7 +15,7 @@ uv run --locked fyntok analyze --by merchant
 uv run --locked pytest -q
 ```
 
-For development, run `just dev` (requires [just](https://just.systems/)). Python changes under
+For development, run `just dev` (requires [just](https://just.systems/)) with debug logging enabled. Python changes under
 `src/fyntok` automatically restart the server. Saved SQLite data persists, but browser UI state
 may reset. Normal `fyntok serve` runs without reload. To enable reload with a custom database or
 port, use `uv run --locked python -m fyntok.cli --database /path/to/file.sqlite3 serve --reload --port 8081`.
