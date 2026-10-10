@@ -38,6 +38,35 @@ def test_minimization_omits_bank_fields_and_common_identifiers() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("description", "expected"),
+    [
+        (
+            "Beispielbank kreditkarte TEST 200001 MC/000000001|"
+            "Beispielbank kreditkarte TEST 200001Abrechnung Nr. 000000001|10",
+            "Beispielbank kreditkarte TEST",
+        ),
+        (
+            "Musterbank kreditkarte DEMO 200002 MC/000000002|Abrechnung Nr. 000000002",
+            "Musterbank kreditkarte DEMO",
+        ),
+        ("Bank | Shop 24 | 10 | 11 | ", "Shop"),
+        (
+            "Bank | AT000000000000000000 / Beispiel Sonnenschutz und | 0000000001",
+            "[ACCOUNT] / Beispiel Sonnenschutz und",
+        ),
+        (
+            "Bank | account user@example.com Shop Reference: secret | 10",
+            "[ACCOUNT] [EMAIL] Shop",
+        ),
+        ("10 | 11 | ", "Unknown merchant"),
+        ("", "Unknown merchant"),
+    ],
+)
+def test_minimization_selects_merchant_before_redacting(description: str, expected: str) -> None:
+    assert minimize_description(description, "account") == expected
+
+
 def test_related_examples_are_ranked_before_recent_unrelated_examples() -> None:
     unrelated = [{"description": "Unrelated pharmacy", "category_id": "care"} for _ in range(50)]
     supermarket = {"description": "EXAMPLE GROCERY Berlin", "category_id": "food"}

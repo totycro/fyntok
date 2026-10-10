@@ -36,17 +36,32 @@ def money(cents: int) -> str:
     return f"{sign}{abs(cents) // 100:,}.{abs(cents) % 100:02d}"
 
 
-def columns(*names: str) -> list[dict[str, Any]]:
-    return [
-        {
+def columns(
+    *names: str, money_columns: tuple[str, ...] = (), count_columns: tuple[str, ...] = ()
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for n in names:
+        column: dict[str, Any] = {
             "name": n,
             "label": n.replace("_", " ").title(),
             "field": n,
             "sortable": True,
             "align": "left",
         }
-        for n in names
-    ]
+        if n in money_columns:
+            column["field"] = f"{n}_cents"
+            column[":format"] = (
+                "value => (value < 0 ? '-' : '') + "
+                "Math.floor(Math.abs(value) / 100).toLocaleString('en-US') + '.' + "
+                "String(Math.abs(value) % 100).padStart(2, '0')"
+            )
+        elif n in count_columns:
+            column[":format"] = "value => value.toLocaleString('en-US')"
+        if n in money_columns or n in count_columns:
+            column["align"] = "right"
+            column["classes"] = "tabular-nums"
+        result.append(column)
+    return result
 
 
 def build_page(
@@ -344,16 +359,7 @@ def build_page(
                 ui.plotly(monthly_figure(monthly)).classes("w-full")
                 ui.plotly(trend_figure(monthly)).classes("w-full")
                 ui.label("Merchant summaries").classes("text-xl")
-                display = [
-                    dict(
-                        r,
-                        outgoing=money(r["outgoing_cents"]),
-                        incoming=money(r["incoming_cents"]),
-                        net=money(r["net_cents"]),
-                        key=i,
-                    )
-                    for i, r in enumerate(summaries)
-                ]
+                display = [dict(r, key=i) for i, r in enumerate(summaries)]
                 ui.table(
                     columns=columns(
                         "merchant",
@@ -364,6 +370,8 @@ def build_page(
                         "outgoing",
                         "incoming",
                         "net",
+                        money_columns=("outgoing", "incoming", "net"),
+                        count_columns=("transaction_count",),
                     ),
                     rows=display,
                     row_key="key",
@@ -376,7 +384,6 @@ def build_page(
                         r,
                         booking_date=r["booking_date"].isoformat(),
                         value_date=r["value_date"].isoformat(),
-                        amount=money(r["amount_cents"]),
                         source_label="AI-generated" if r["origin_source"] == "ai" else r["source"],
                     )
                     for r in rows
@@ -391,6 +398,7 @@ def build_page(
                         "category",
                         "source_label",
                         "protected",
+                        money_columns=("amount",),
                     ),
                     rows=display,
                     row_key="id",
@@ -429,7 +437,12 @@ def build_page(
                     ]
                 ui.table(
                     columns=columns(
-                        "filename", "created_at", "row_count", "inserted_count", "duplicate_count"
+                        "filename",
+                        "created_at",
+                        "row_count",
+                        "inserted_count",
+                        "duplicate_count",
+                        count_columns=("row_count", "inserted_count", "duplicate_count"),
                     ),
                     rows=records,
                     row_key="id",

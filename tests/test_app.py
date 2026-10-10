@@ -27,6 +27,66 @@ def poll_dashboard(user: User) -> None:
             timer.callback()
 
 
+def test_numeric_table_columns(tmp_path: Path) -> None:
+    """Amounts and counts reach the browser as numbers, with display-only formatting."""
+    engine = open_database(tmp_path / "numeric-ui.sqlite3")
+    amounts = ("-1000,01", "-10,00", "-2,00", "0,00", "2,00", "10,00", "1000,01")
+    content = "".join(
+        f"a;Merchant {i};01.01.2024;01.01.2024;{amount};EUR\n" for i, amount in enumerate(amounts)
+    ).encode()
+    import_content(engine, content, "numbers.csv")
+    import_content(engine, content, "duplicates.csv")
+
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(engine, auth=ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            tables = list(user.find(ui.table).elements)
+            assert len(tables) == 3
+            for table in tables:
+                for column in table.columns:
+                    name = column["name"]
+                    if name in {"incoming", "outgoing", "net", "amount"}:
+                        assert column["field"] == f"{name}_cents"
+                        assert ":format" in column
+                    elif name.endswith("_count"):
+                        assert column["field"] == name
+                        assert ":format" in column
+                    else:
+                        assert column["align"] == "left"
+                        continue
+                    assert column["sortable"]
+                    assert column["align"] == "right"
+                    assert column["classes"] == "tabular-nums"
+                    assert all(type(row[column["field"]]) is int for row in table.rows)
+
+            transactions = next(
+                t for t in tables if t.row_key == "id" and "amount_cents" in t.rows[0]
+            )
+            assert sorted(row["amount_cents"] for row in transactions.rows) == [
+                -100001,
+                -1000,
+                -200,
+                0,
+                200,
+                1000,
+                100001,
+            ]
+            summaries = next(t for t in tables if t.row_key == "key")
+            assert sorted(row["net_cents"] for row in summaries.rows) == sorted(
+                row["amount_cents"] for row in transactions.rows
+            )
+            imports = next(t for t in tables if "filename" in t.rows[0])
+            assert {row["inserted_count"] for row in imports.rows} == {0, 7}
+            assert {row["duplicate_count"] for row in imports.rows} == {0, 7}
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        engine.dispose()
+
+
 def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.DEBUG, logger="fyntok")
     engine = open_database(tmp_path / "ui.sqlite3")

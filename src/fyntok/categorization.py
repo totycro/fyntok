@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from .ai import AIRequestError, Classifier, Proposer
 from .database import require_record
 from .manual import _active, _assign, categories, save_category
+from .merchants import merchant_text
 from .models import CategorizationRun, Category, ConfirmedExample, RunItem, Transaction
 from .queries import Filters, transaction_rows
 
@@ -25,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 
 def minimize_description(description: str, account: str = "") -> str:
-    """Prefer merchant suffix; redact common identifiers in free-form descriptions."""
-    text = description.rsplit("|", 1)[-1]
+    """Select meaningful merchant text; redact common identifiers in free-form descriptions."""
+    text = merchant_text(description)
     if account:
         text = re.sub(r"(?<!\w)" + re.escape(account) + r"(?!\w)", "[ACCOUNT]", text)
     text = re.sub(r"\b[A-Z]{2}\s*\d{2}(?:\s*[A-Z0-9]){10,30}\b", "[ACCOUNT]", text, flags=re.I)

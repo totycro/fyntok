@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from .merchants import merchant_text
 from .models import Import, ImportRow, Transaction
 
 
@@ -29,7 +30,7 @@ class ImportResult:
 
 def merchant_label(description: str) -> str:
     """A conservative display grouping, never a categorization rule."""
-    return re.sub(r"\s+", " ", description.rsplit("|", 1)[-1]).strip() or "Unknown"
+    return merchant_text(description) or "Unknown"
 
 
 def parse_csv(content: bytes) -> list[dict[str, Any]]:

@@ -22,6 +22,17 @@ port, use `uv run --locked python -m fyntok.cli --database /path/to/file.sqlite3
 
 The database defaults to `data/fyntok.sqlite3`; select another with `fyntok --database /path/to/file.sqlite3 import /path/to/export.csv`. Data, databases, and virtual environments are ignored by Git. `uv.lock` fixes transitive dependencies. Direct dependencies are pinned; Plotly 6.9.0 is the latest stable version compatible with NiceGUI's Plotly extra (`<7`).
 
+To remove test transactions while keeping all category names and definitions, stop the app and run:
+
+```bash
+uv run --locked python scripts/clear-transactions.py --dangerously-delete-all-transactions
+```
+
+Use `--database /path/to/file.sqlite3` to select another database. The full danger flag is required;
+abbreviations are rejected. The script creates a timestamped SQLite backup beside the database before
+clearing transactions, import history, assignments, confirmed examples, and categorization runs.
+Restart the app afterward to import fresh data.
+
 Imports expect six headerless, semicolon-separated CP1252 fields: account, description, booking date, value date, signed German decimal amount, and currency. Dates use `DD.MM.YYYY`; amounts require exactly two decimal places. The original file bytes and decoded fields are retained, including both dates and the account field. Validation or write failure rolls back the entire import. Financial values are stored and summed as integer cents.
 
 Each successful import records its filename, hash, original bytes, timestamp, counts, and a mapping from every source row to its stored transaction. Repeat imports add an import-history entry but reuse transactions. Matching uses all six original fields plus the occurrence number within the export: two identical rows in a file remain two transactions, and overlapping exports retain the greatest observed multiplicity. With no bank-provided transaction ID, identical fields cannot distinguish an already imported transaction from a new identical transaction. Exports with changed fields count as new rows; review those inputs before importing.

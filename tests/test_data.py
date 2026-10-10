@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from fyntok.analysis import aggregate
 from fyntok.database import open_database, require_record
-from fyntok.importer import import_csv, parse_csv
+from fyntok.importer import import_csv, merchant_label, parse_csv
 from fyntok.models import (
     Assignment,
     CategorizationRun,
@@ -100,6 +100,41 @@ def test_amounts_and_quoted_fields() -> None:
     assert fields["description"] == "shop; café"
     with pytest.raises(ValueError, match="no transactions"):
         parse_csv(b"")
+
+
+@pytest.mark.parametrize(
+    ("description", "expected"),
+    [
+        (
+            "Beispielbank kreditkarte TEST 200001 MC/000000001|"
+            "Beispielbank kreditkarte TEST 200001Abrechnung Nr. 000000001|10",
+            "Beispielbank kreditkarte TEST",
+        ),
+        (
+            "Musterbank kreditkarte DEMO           200002       MC/000000002|"
+            "Abrechnung Nr. 000000002",
+            "Musterbank kreditkarte DEMO",
+        ),
+        (
+            "Abbuchung Onlinebanking FE/000000001|Beispiel Sonnenschutz und|0000000001",
+            "Beispiel Sonnenschutz und",
+        ),
+        ("Bank | Shop | 10 | 11 | 12", "Shop"),
+        ("Bank |  Café   Beispiel  | 12 | ", "Café Beispiel"),
+        ("Bank | Shop 24", "Shop 24"),
+        ("Beispielbank kreditkarte TEST shop | Shop 24", "Shop 24"),
+        ("Bank | 7-Shop", "7-Shop"),
+        ("123", "Unknown"),
+        (" 10 | 11 | ", "Unknown"),
+        (" | ", "Unknown"),
+        ("", "Unknown"),
+    ],
+)
+def test_merchant_labels_use_meaningful_text(description: str, expected: str) -> None:
+    assert merchant_label(description) == expected
+    parsed = parse_csv(f"a;{description};01.01.2024;01.01.2024;-1,00;EUR\n".encode("cp1252"))
+    assert parsed[0]["merchant"] == expected
+    assert parsed[0]["description"] == description
 
 
 def test_sql_aggregation_uses_active_assignments_and_booking_date(
@@ -272,6 +307,16 @@ def test_supplied_dataset_exact_totals_months_and_reload(engine: Engine, tmp_pat
             )
         )
         assert [t.original_fields for t in stored] == fields
+        assert all(not t.merchant.isdigit() for t in stored)
+        card_statements = [
+            t
+            for t in stored
+            if " kreditkarte " in t.description.split("|")[0]
+            and " MC/" in t.description.split("|")[0]
+        ]
+        assert card_statements
+        assert len({t.merchant for t in card_statements}) == 1
+        assert all(t.description.startswith(t.merchant + " ") for t in card_statements)
         assert all(
             t.booking_date == datetime.strptime(r[2], "%d.%m.%Y").date()
             and t.value_date == datetime.strptime(r[3], "%d.%m.%Y").date()
