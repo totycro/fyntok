@@ -15,6 +15,11 @@ uv run --locked fyntok analyze --by merchant
 uv run --locked pytest -q
 ```
 
+For development, run `just dev` (requires [just](https://just.systems/)). Python changes under
+`src/fyntok` automatically restart the server. Saved SQLite data persists, but browser UI state
+may reset. Normal `fyntok serve` runs without reload. To enable reload with a custom database or
+port, use `uv run --locked python -m fyntok.cli --database /path/to/file.sqlite3 serve --reload --port 8081`.
+
 The database defaults to `data/fyntok.sqlite3`; select another with `fyntok --database /path/to/file.sqlite3 import /path/to/export.csv`. Data, databases, and virtual environments are ignored by Git. `uv.lock` fixes transitive dependencies. Direct dependencies are pinned; Plotly 6.9.0 is the latest stable version compatible with NiceGUI's Plotly extra (`<7`).
 
 Imports expect six headerless, semicolon-separated CP1252 fields: account, description, booking date, value date, signed German decimal amount, and currency. Dates use `DD.MM.YYYY`; amounts require exactly two decimal places. The original file bytes and decoded fields are retained, including both dates and the account field. Validation or write failure rolls back the entire import. Financial values are stored and summed as integer cents.

@@ -19,6 +19,7 @@ def main() -> None:
     analysis.add_argument("--by", choices=["monthly", "trends", "merchant"], default="monthly")
     serve = commands.add_parser("serve", help="Open the localhost manual application")
     serve.add_argument("--port", type=int, default=8080)
+    serve.add_argument("--reload", action="store_true", help="Reload on Python source changes")
     serve.add_argument(
         "--log-level",
         choices=["debug", "info", "warning", "error", "critical"],
@@ -37,7 +38,7 @@ def main() -> None:
         if args.command == "serve":
             from .app import serve
 
-            serve(engine, port=args.port, log_level=args.log_level)
+            serve(engine, port=args.port, log_level=args.log_level, reload=args.reload)
             return
         result = (
             asdict(import_csv(engine, args.csv))
@@ -49,5 +50,5 @@ def main() -> None:
         engine.dispose()
 
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__mp_main__"}:
     main()

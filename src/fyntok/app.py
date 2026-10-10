@@ -3,6 +3,7 @@
 import logging
 from collections.abc import Callable
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from nicegui import events, run, ui
@@ -440,7 +441,7 @@ def build_page(
     refresh()
 
 
-def serve(engine: Engine, port: int = 8080, log_level: str = "info") -> None:
+def serve(engine: Engine, port: int = 8080, log_level: str = "info", reload: bool = False) -> None:
     from .ai import ResponsesClient
     from .auth import ChatGPTSession
 
@@ -458,7 +459,8 @@ def serve(engine: Engine, port: int = 8080, log_level: str = "info") -> None:
             host="127.0.0.1",
             port=port,
             title="fyntok",
-            reload=False,
+            reload=reload,
+            uvicorn_reload_dirs=str(Path(__file__).resolve().parent),
             show=False,
             uvicorn_logging_level=log_level,
             access_log=True,

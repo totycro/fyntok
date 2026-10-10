@@ -20,4 +20,4 @@ format:
     uv run --locked ruff format .
 
 dev:
-    uv run --locked fyntok serve
+    uv run --locked python -m fyntok.cli serve --reload
