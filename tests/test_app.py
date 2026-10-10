@@ -7,6 +7,7 @@ from typing import Any, override
 
 import pytest
 from nicegui import ui
+from nicegui.testing import User
 from nicegui.testing.user_simulation import user_simulation
 
 from fyntok.ai import AI_MODEL, AIRequestError
@@ -16,6 +17,14 @@ from fyntok.database import open_database
 from fyntok.importer import import_content
 from fyntok.manual import categories
 from fyntok.queries import transaction_rows
+
+
+def poll_dashboard(user: User) -> None:
+    """Run a dashboard polling cycle without waiting for the timer interval."""
+    with user:
+        for timer in user.find(ui.timer).elements:
+            assert timer.callback is not None
+            timer.callback()
 
 
 def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -46,7 +55,7 @@ def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
             user.find("Name").type("Food")
             user.find("Definition").type("Groceries and supermarket purchases")
             user.find("Save").click()
-            await asyncio.sleep(0.05)
+            await user.should_see("Food")
             assert any(c["name"] == "Food" for c in categories(engine))
             user.find("Transactions").click()
             table = next(
@@ -54,6 +63,7 @@ def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
                 for t in user.find(ui.table).elements
                 if "description" in {c["name"] for c in t.columns}
             )
+            table.mark("before-confirmation")
             from nicegui import events
 
             with user:
@@ -79,7 +89,9 @@ def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
                 )
                 selection.value = next(c["id"] for c in categories(engine) if c["name"] == "Food")
             user.find("Confirm individual category").click()
-            await asyncio.sleep(0.05)
+            await user.should_not_see(marker="before-confirmation")
+            await user.should_see("1 matching transactions")
+            await user.should_not_see("Transaction details")
             row = transaction_rows(engine)[0]
             assert row["category"] == "Food" and row["protected"]
             await user.should_see("1 matching transactions")
@@ -88,6 +100,7 @@ def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
                 for t in user.find(ui.table).elements
                 if "description" in {c["name"] for c in t.columns}
             )
+            table.mark("before-undo")
             with user:
                 listener = next(
                     listener
@@ -101,26 +114,26 @@ def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
                     ),
                 )
             user.find("Undo latest assignment change").click()
-            await asyncio.sleep(0.05)
+            await user.should_not_see(marker="before-undo")
+            await user.should_see("1 matching transactions")
+            await user.should_not_see("Transaction details")
             assert transaction_rows(engine)[0]["category"] == "Uncategorized"
             assert not transaction_rows(engine)[0]["protected"]
             user.find("Description contains").type("missing")
             user.find("Apply filters").click()
-            await asyncio.sleep(0.05)
             await user.should_see("0 matching transactions")
             user.find("Clear").click()
-            await asyncio.sleep(0.05)
             await user.should_see("1 matching transactions")
             user.find("Categories").click()
             user.find("Edit").click()
             user.find("Name").clear().type("Groceries")
             user.find("Save").click()
-            await asyncio.sleep(0.05)
+            await user.should_see("Groceries · spending")
             assert any(c["name"] == "Groceries" for c in categories(engine))
             user.find("Create category").click()
             user.find("Name").type("Shopping")
             user.find("Save").click()
-            await asyncio.sleep(0.05)
+            await user.should_see("Shopping · spending")
             user.find("Merge").click()
             with user:
                 destination = next(
@@ -132,11 +145,13 @@ def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
                     c["id"] for c in categories(engine) if c["name"] == "Shopping"
                 )
             user.find("Merge category").click()
-            await asyncio.sleep(0.05)
+            await user.should_see("Shopping · spending")
+            await user.should_not_see("Groceries · spending")
             assert {c["name"] for c in categories(engine)} == {"Shopping", "Uncategorized"}
             user.find("Delete").click()
             user.find("Delete category").click()
-            await asyncio.sleep(0.05)
+            await user.should_see("Uncategorized · uncategorized")
+            await user.should_not_see("Shopping · spending")
             assert [c["name"] for c in categories(engine)] == ["Uncategorized"]
 
     try:
@@ -219,7 +234,7 @@ def test_ai_ui_proposals_fixed_model_and_recalculation(
             assert len(categories(engine)) == 1
             user.find("Suggested name").clear().type("Food")
             user.find("Approve category").click()
-            await asyncio.sleep(0.05)
+            await user.should_see("Category approved and saved.")
             assert {c["name"] for c in categories(engine)} == {"Food", "Uncategorized"}
             user.find("Recalculate categories — all transactions").click()
             await user.should_see("Completed: 1 applied, 0 protected or changed; 1 / 1 processed.")
@@ -342,7 +357,7 @@ def test_ui_cancel_and_recover_after_reload(
             # Polling completed history must leave sign-out status visible.
             user.find("Sign out").click()
             await user.should_see("Signed out.")
-            await asyncio.sleep(0.6)
+            poll_dashboard(user)
             await user.should_see("Signed out.")
 
     try:
@@ -416,7 +431,13 @@ def test_ui_refreshes_signed_in_account_and_selects_account_for_actions(
             del payload
             assert model == AI_MODEL
             requested_accounts.append(auth.active_account())
-            return {"categories": []}
+            return {
+                "categories": (
+                    [{"name": "Food", "definition": "Groceries", "kind": "spending"}]
+                    if auth.active_account() == "second"
+                    else []
+                )
+            }
 
         def classify(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
             del model, payload
@@ -440,7 +461,8 @@ def test_ui_refreshes_signed_in_account_and_selects_account_for_actions(
                 }
                 data["active"] = "second"
                 auth.save(data)
-            await asyncio.sleep(0.6)
+            poll_dashboard(user)
+            await user.should_see("Connected to ChatGPT. Ready to use AI.")
             account = next(
                 s
                 for s in user.find(ui.select).elements
@@ -448,16 +470,15 @@ def test_ui_refreshes_signed_in_account_and_selects_account_for_actions(
             )
             assert account.value == "second"
             assert "second" in account.options
-            await user.should_see("Connected to ChatGPT. Ready to use AI.")
             await user.should_see(kind=ui.button, content="Reconnect")
             await user.should_not_see("Open ChatGPT sign-in, then return here to use AI.")
             user.find("Propose categories").click()
-            await user.should_see("0 suggestions ready for review.")
+            await user.should_see("1 suggestions ready for review.")
             assert requested_accounts == ["second"]
             with user:
                 account.value = "first"
             user.find("Propose categories").click()
-            await asyncio.sleep(0.1)
+            await user.should_see("0 suggestions ready for review.")
             assert requested_accounts == ["second", "first"]
             await user.should_see(kind=ui.button, content="Continue with ChatGPT")
             with user:
