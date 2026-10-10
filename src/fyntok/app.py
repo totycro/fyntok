@@ -60,6 +60,10 @@ def columns(
         if n in money_columns or n in count_columns:
             column["align"] = "right"
             column["classes"] = "tabular-nums"
+        if n == "description":
+            column["style"] = (
+                "max-width: 24rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap"
+            )
         result.append(column)
     return result
 
