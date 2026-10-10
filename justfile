@@ -18,3 +18,6 @@ test *args:
 format:
     uv run --locked ruff check --fix .
     uv run --locked ruff format .
+
+dev:
+    uv run --locked fyntok serve
