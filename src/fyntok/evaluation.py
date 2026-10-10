@@ -91,9 +91,7 @@ def main() -> None:
         )
     )
     parser.add_argument("--sample", type=Path, default=Path("evaluations/sample.json"))
-    parser.add_argument(
-        "--model", required=True, help="An account-supported model from Load models"
-    )
+    parser.add_argument("--model", required=True, help="An account-supported model identifier")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     from .ai import ResponsesClient

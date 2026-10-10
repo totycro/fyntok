@@ -134,7 +134,7 @@ def approve_proposal(engine: Engine, proposal: dict[str, Any]) -> str:
 
 def start_run(engine: Engine, model: str, filters: Filters = DEFAULT_FILTERS) -> str:
     if not model:
-        raise ValueError("Choose an account-supported model first.")
+        raise ValueError("A model identifier is required.")
     with Session(engine) as session, session.begin():
         session.connection().exec_driver_sql("BEGIN IMMEDIATE")
         unfinished = session.scalar(

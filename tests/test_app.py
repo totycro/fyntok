@@ -9,6 +9,7 @@ import pytest
 from nicegui import ui
 from nicegui.testing.user_simulation import user_simulation
 
+from fyntok.ai import AI_MODEL, AIRequestError
 from fyntok.app import build_page
 from fyntok.auth import ChatGPTSession
 from fyntok.database import open_database
@@ -156,7 +157,7 @@ def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
         engine.dispose()
 
 
-def test_ai_ui_proposals_model_selection_and_recalculation(
+def test_ai_ui_proposals_fixed_model_and_recalculation(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A person connects their plan, edits and approves a suggestion, and reviews AI assignments."""
@@ -179,16 +180,13 @@ def test_ai_ui_proposals_model_selection_and_recalculation(
     )
 
     class Advisor:
-        def models(self) -> list[dict[str, Any]]:
-            return [{"slug": "story-model", "display_name": "Story model"}]
-
         def propose(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
             del payload
             assert (
                 "Propose categories: preparing descriptions and requesting AI suggestions"
                 in caplog.text
             )
-            assert model == "story-model"
+            assert model == AI_MODEL == "gpt-6-luna"
             return {
                 "categories": [
                     {"name": "Groceries", "definition": "Food at supermarkets", "kind": "spending"}
@@ -196,7 +194,7 @@ def test_ai_ui_proposals_model_selection_and_recalculation(
             }
 
         def classify(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
-            del model
+            assert model == AI_MODEL
             category = next(c for c in payload["categories"] if c["name"] == "Food")
             return {
                 "assignments": [
@@ -213,11 +211,9 @@ def test_ai_ui_proposals_model_selection_and_recalculation(
         async with user_simulation(lambda: build_page(engine, Advisor(), auth)) as user:
             await user.open("/")
             assert user.client is not None
-            user.find("Propose categories").click()
-            await user.should_see("Choose a model and wait for current AI work to finish.")
-            assert "Propose categories: blocked; busy=False, model selected=False" in caplog.text
-            user.find(kind=ui.button, content="Load models").click()
-            await user.should_see("ChatGPT plan connected.")
+            await user.should_see("AI model: gpt-6-luna")
+            await user.should_not_see(kind=ui.button, content="Load models")
+            await user.should_not_see(kind=ui.select, content="AI model")
             user.find("Propose categories").click()
             await user.should_see("1 suggestions ready for review.")
             assert len(categories(engine)) == 1
@@ -234,7 +230,6 @@ def test_ai_ui_proposals_model_selection_and_recalculation(
 
     try:
         asyncio.run(scenario())
-        assert "Load models: completed with 1 available models" in caplog.text
         assert "Propose categories: completed with 1 suggestions" in caplog.text
         assert "Approve category: completed" in caplog.text
         assert "Recalculate categories — all transactions: saved run" in caplog.text
@@ -258,9 +253,6 @@ def test_proposal_failure_logs_traceback_at_default_level(
             del model, payload
             raise NotImplementedError("This scenario only requests proposals.")
 
-        def models(self) -> list[dict[str, Any]]:
-            return [{"slug": "test-model", "display_name": "Test model"}]
-
         def propose(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
             del model, payload
             raise error_type("proposal request failed")
@@ -271,8 +263,6 @@ def test_proposal_failure_logs_traceback_at_default_level(
         ) as user:
             await user.open("/")
             assert user.client is not None
-            user.find(kind=ui.button, content="Load models").click()
-            await user.should_see("ChatGPT plan connected.")
             user.find("Propose categories").click()
             await user.should_see(f"Category suggestions unavailable ({error_type.__name__}).")
 
@@ -302,9 +292,6 @@ def test_ui_cancel_and_recover_after_reload(
     run_id = start_run(engine, "saved-model")
 
     class Advisor:
-        def models(self) -> list[dict[str, Any]]:
-            return []
-
         def propose(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
             del model, payload
             raise NotImplementedError("This scenario only resumes categorization.")
@@ -361,5 +348,110 @@ def test_ui_cancel_and_recover_after_reload(
     try:
         asyncio.run(scenario())
         assert not [r for r in caplog.records if r.levelname == "ERROR"]
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "action", ["Propose categories", "Recalculate categories — all transactions"]
+)
+def test_ui_unavailable_model_has_no_fallback(tmp_path: Path, action: str) -> None:
+    engine = open_database(tmp_path / "unavailable.sqlite3")
+    import_content(engine, b"a;EXAMPLE GROCERY;01.01.2024;01.01.2024;-10,00;EUR\n", "bank.csv")
+    calls: list[str] = []
+
+    class Unavailable:
+        def propose(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
+            del payload
+            calls.append(model)
+            raise AIRequestError(400, "subscription_sharing_unsupported_capability")
+
+        def classify(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
+            return self.propose(model, payload)
+
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(engine, Unavailable(), ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            user.find(action).click()
+            await user.should_see("Check the configured model.")
+            assert calls == ["gpt-6-luna"]
+            assert transaction_rows(engine)[0]["source"] == "unassigned"
+            await user.should_see("Create category")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        engine.dispose()
+
+
+def test_ui_refreshes_signed_in_account_and_selects_account_for_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = open_database(tmp_path / "accounts.sqlite3")
+    auth = ChatGPTSession(tmp_path / "credentials")
+    with auth.locked():
+        data = auth.load()
+        data["accounts"]["first"] = {"subject": "first", "email": "first@example.com"}
+        data["active"] = "first"
+        auth.save(data)
+
+    monkeypatch.setattr(auth, "start_login", lambda _client_id=None: "https://auth.openai.com/")
+    requested_accounts: list[str | None] = []
+    signed_out: list[str | None] = []
+
+    def sign_out() -> bool:
+        signed_out.append(auth.active_account())
+        return True
+
+    monkeypatch.setattr(auth, "sign_out", sign_out)
+
+    class Advisor:
+        def propose(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
+            del payload
+            assert model == AI_MODEL
+            requested_accounts.append(auth.active_account())
+            return {"categories": []}
+
+        def classify(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
+            del model, payload
+            raise NotImplementedError("This scenario only proposes categories.")
+
+    async def scenario() -> None:
+        async with user_simulation(lambda: build_page(engine, Advisor(), auth)) as user:
+            await user.open("/")
+            user.find("Continue with ChatGPT").click()
+            await user.should_see("Open ChatGPT sign-in, then return here to use AI.")
+            # Simulate the callback completing while the dashboard remains open.
+            with auth.locked():
+                data = auth.load()
+                data["accounts"]["second"] = {"subject": "second", "email": "second@example.com"}
+                data["active"] = "second"
+                auth.save(data)
+            await asyncio.sleep(0.6)
+            account = next(
+                s
+                for s in user.find(ui.select).elements
+                if s.props.get("label") == "ChatGPT account"
+            )
+            assert account.value == "second"
+            assert "second" in account.options
+            user.find("Propose categories").click()
+            await user.should_see("0 suggestions ready for review.")
+            assert requested_accounts == ["second"]
+            with user:
+                account.value = "first"
+            user.find("Propose categories").click()
+            await asyncio.sleep(0.1)
+            assert requested_accounts == ["second", "first"]
+            with user:
+                account.value = "second"
+            user.find("Sign out").click()
+            await user.should_see("Signed out.")
+            assert signed_out == ["second"]
+
+    try:
+        asyncio.run(scenario())
     finally:
         engine.dispose()

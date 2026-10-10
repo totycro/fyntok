@@ -7,6 +7,8 @@ import httpx
 
 from .auth import RESOURCE
 
+AI_MODEL = "gpt-6-luna"
+
 
 class AIRequestError(RuntimeError):
     """Safe diagnostic fields only; server messages may contain private inputs."""
@@ -28,7 +30,7 @@ class AIRequestError(RuntimeError):
             ),
             "subscription_sharing_invalid_user": "ChatGPT session is invalid. Sign in again.",
             "subscription_sharing_unsupported_capability": (
-                "The model or request capability is unsupported. Check the selected model."
+                "The model or request capability is unsupported. Check the configured model."
             ),
             "subscription_sharing_route_not_supported": "The ChatGPT request route is unsupported.",
             "chatpass_v2_scope_not_authorized": (
@@ -75,7 +77,7 @@ class Proposer(Protocol):
 
 
 class AIClient(Classifier, Proposer, Protocol):
-    def models(self) -> list[dict[str, Any]]: ...
+    pass
 
 
 class AuthSession(Protocol):
@@ -131,19 +133,6 @@ def classification_schema(categories: list[dict[str, Any]]) -> dict[str, Any]:
 class ResponsesClient:
     def __init__(self, session: AuthSession) -> None:
         self.session = session
-
-    def models(self) -> list[dict[str, Any]]:
-        with httpx.Client(
-            timeout=30, headers={"Authorization": "Bearer " + self.session.access_token()}
-        ) as client:
-            response = client.get(RESOURCE + "/models")
-            if response.is_error:
-                raise response_error(response)
-            return [
-                {"slug": m["slug"], "display_name": m["display_name"]}
-                for m in response.json()["models"]
-                if m.get("visibility") == "list"
-            ]
 
     def request(
         self, model: str, payload: dict[str, Any], schema: dict[str, Any], instructions: str

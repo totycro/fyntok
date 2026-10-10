@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from .ai import AIClient
+from .ai import AI_MODEL, AIClient, AIRequestError
 from .auth import ChatGPTSession
 from .categorization import (
     approve_proposal,
@@ -61,12 +61,26 @@ def build_ai_panel(
         ).classes("w-96")
         authorization = ui.link("Open ChatGPT sign-in", "#", new_tab=True)
         authorization.set_visibility(False)
-        status = ui.label("Load models after signing in. Manual review is always available.")
-        model = ui.select(
-            {},
-            label="AI model",
-            on_change=lambda: logger.debug("Select AI model: selection changed"),
-        ).classes("w-96")
+        ui.label(f"AI model: {AI_MODEL}")
+        status = ui.label("Sign in with ChatGPT to use AI. Manual review is always available.")
+        last_active_account = auth.active_account()
+
+        def refresh_accounts() -> None:
+            nonlocal last_active_account
+            active = auth.active_account()
+            options = auth.accounts()
+            if options != account.options or active != last_active_account:
+                account.options = options
+                if active != last_active_account:
+                    account.value = active
+                account.update()
+                last_active_account = active
+
+        async def prepare_account() -> None:
+            refresh_accounts()
+            if account.value:
+                await run.io_bound(auth.select, account.value)
+                refresh_accounts()
 
         async def login() -> None:
             logger.debug("Continue with ChatGPT: starting sign-in")
@@ -75,45 +89,11 @@ def build_ai_panel(
                 authorization.props["href"] = url
                 authorization.update()
                 authorization.set_visibility(True)
-                status.set_text("Open ChatGPT sign-in, then return here and load models.")
+                status.set_text("Open ChatGPT sign-in, then return here to use AI.")
                 logger.debug("Continue with ChatGPT: sign-in link ready")
             except Exception as exc:
                 logger.exception("Continue with ChatGPT failed (%s)", type(exc).__name__)
                 status.set_text(f"Sign-in unavailable ({type(exc).__name__}). Try again.")
-
-        async def load_models() -> None:
-            logger.debug("Load models: fetching available models")
-            try:
-                if account.value:
-                    await run.io_bound(auth.select, account.value)
-                catalog = await run.io_bound(client.models)
-                if catalog is None:
-                    raise RuntimeError("Background operation was cancelled.")
-                account.options = auth.accounts()
-                account.value = auth.active_account()
-                account.update()
-                model.options = {m["slug"]: m["display_name"] for m in catalog}
-                model.value = (
-                    "gpt-6-luna"
-                    if "gpt-6-luna" in model.options
-                    else next(iter(model.options), None)
-                )
-                model.update()
-                authorization.set_visibility(False)
-                status.set_text(
-                    "ChatGPT plan connected."
-                    if catalog
-                    else "No available models for this account."
-                )
-                logger.debug("Load models: completed with %d available models", len(catalog))
-            except Exception as exc:
-                logger.exception("Load models failed (%s)", type(exc).__name__)
-                model.options, model.value = {}, None
-                model.update()
-                status.set_text(
-                    f"AI unavailable ({type(exc).__name__}). Sign in with plan "
-                    f"permission or check plan limits."
-                )
 
         async def sign_out() -> None:
             logger.debug("Sign out: requested")
@@ -124,12 +104,11 @@ def build_ai_panel(
                 )
                 return
             try:
+                await prepare_account()
                 confirmed = await run.io_bound(auth.sign_out)
             except Exception as exc:
                 logger.exception("Sign out failed (%s)", type(exc).__name__)
                 raise
-            model.options, model.value = {}, None
-            model.update()
             authorization.set_visibility(False)
             status.set_text(
                 "Signed out."
@@ -143,19 +122,17 @@ def build_ai_panel(
 
         with ui.row():
             ui.button("Continue with ChatGPT", on_click=login)
-            ui.button("Load models", on_click=load_models).props("outline")
             ui.button("Sign out", on_click=sign_out).props("flat")
         proposals = ui.column().classes("w-full")
 
         async def propose() -> None:
             logger.debug("Propose categories: requested")
-            if state["busy"] or not model.value:
+            if state["busy"]:
                 logger.debug(
-                    "Propose categories: blocked; busy=%s, model selected=%s",
+                    "Propose categories: blocked; busy=%s",
                     state["busy"],
-                    bool(model.value),
                 )
-                ui.notify("Choose a model and wait for current AI work to finish.", type="warning")
+                ui.notify("Wait for current AI work to finish.", type="warning")
                 return
             state["busy"] = True
             status.set_text("Preparing category suggestions…")
@@ -163,7 +140,8 @@ def build_ai_panel(
                 logger.debug(
                     "Propose categories: preparing descriptions and requesting AI suggestions"
                 )
-                suggestions = await run.io_bound(propose_categories, engine, client, model.value)
+                await prepare_account()
+                suggestions = await run.io_bound(propose_categories, engine, client, AI_MODEL)
                 if suggestions is None:
                     raise RuntimeError("Background operation was cancelled.")
                 proposals.clear()
@@ -223,6 +201,7 @@ def build_ai_panel(
                 status.set_text(
                     f"Category suggestions unavailable ({type(exc).__name__}). Manual "
                     f"category creation remains available."
+                    + (f" {exc}" if isinstance(exc, AIRequestError) else "")
                 )
             finally:
                 state["busy"] = False
@@ -309,6 +288,7 @@ def build_ai_panel(
             state["busy"] = state["running"] = True
             try:
                 logger.debug("Resume / recover selected run: recovering unfinished work")
+                await prepare_account()
                 result = await run.io_bound(resume_run, engine, client, state["run_id"])
                 if result is None:
                     raise RuntimeError("Background operation was cancelled.")
@@ -331,27 +311,22 @@ def build_ai_panel(
                 else "Recalculate categories — all transactions"
             )
             logger.debug("%s: requested", action)
-            if state["busy"] or not model.value:
+            if state["busy"]:
                 logger.debug(
-                    "%s: blocked; busy=%s, model selected=%s",
+                    "%s: blocked; busy=%s",
                     action,
                     state["busy"],
-                    bool(model.value),
                 )
-                ui.notify("Choose a model and wait for current AI work to finish.", type="warning")
-                return
-            try:
-                scope = filters() if filtered else Filters()
-                state["run_id"] = start_run(engine, model.value, scope)
-                logger.debug("%s: saved run; starting background categorization", action)
-            except ValueError as exc:
-                logger.exception("%s failed to start (%s)", action, type(exc).__name__)
-                ui.notify(str(exc), type="negative")
+                ui.notify("Wait for current AI work to finish.", type="warning")
                 return
             state["busy"] = True
-            state["running"] = True
-            poll()
             try:
+                await prepare_account()
+                scope = filters() if filtered else Filters()
+                state["run_id"] = start_run(engine, AI_MODEL, scope)
+                logger.debug("%s: saved run; starting background categorization", action)
+                state["running"] = True
+                poll()
                 result = await run.io_bound(execute_run, engine, client, state["run_id"])
                 if result is None:
                     raise RuntimeError("Background operation was cancelled.")
@@ -382,6 +357,7 @@ def build_ai_panel(
             "waits until any live worker has stopped."
         )
         progress = ui.linear_progress(value=0).classes("w-full")
+        ui.timer(0.5, refresh_accounts)
         ui.timer(0.5, lambda: poll(False))
         with Session(engine) as session:
             recent = session.scalar(

@@ -327,7 +327,7 @@ class ChatGPTSession:
                     return
                 try:
                     owner.complete(redirect + "?" + urlparse(self.path).query)
-                    message, status = "Sign-in complete. Return to fyntok and load models.", 200
+                    message, status = "Sign-in complete. Return to fyntok to use AI.", 200
                 except Exception:
                     owner.login_error = "Sign-in failed. Please try again."
                     message, status = owner.login_error, 400

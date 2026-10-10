@@ -60,7 +60,7 @@ The user does not need to select all supermarket transactions or create a mercha
 - Validated LLM assignments automatically become active assignments for eligible transactions during recalculation. Dashboard totals reflect active assignments.
 - Detect intervening user edits during a run and exclude those transactions from automatic application.
 - if categories are changed, users are responsible for recalculating the other definitions if necessary.
-- Implement supported Sign in with ChatGPT OAuth, persistent local registration, token refresh, and sign-out. Discover account-supported Responses models and provide a model selector.
+- Implement supported Sign in with ChatGPT OAuth, persistent local registration, token refresh, and sign-out. Use the fixed `gpt-6-luna` identifier for new requests without model discovery or fallback.
 - Keep credentials in a protected local credential store outside the transaction database and repository.
 - Follow subscription request requirements, including streaming, `store: false`, and explicit request context.
 - Send minimized descriptions, current category definitions, and relevant human-confirmed examples with every categorization request. Remove account identifiers and unrelated personal details.
@@ -128,7 +128,7 @@ Remaining work: milestones 3–4. Definition changes currently explain that hist
 
 **Status: Complete**
 
-- Adapt the retained experiment behind a small replaceable Python interface, with supported ChatGPT sign-in, persistent registration, protected credentials, token refresh, sign-out, model discovery, and model selection.
+- Adapt the retained experiment behind a small replaceable Python interface, with supported ChatGPT sign-in, persistent registration, protected credentials, token refresh, sign-out, and a single manually editable Luna model constant.
 - Implement category proposals from representative descriptions, requiring user approval before adding categories.
 - Implement initial categorization and recalculation for all transactions or the current filtered selection, using current definitions and relevant latest human-confirmed examples.
 - Minimize request data, follow subscription request requirements, validate structured responses, and automatically apply valid assignments to eligible transactions while preserving manual corrections and assignment history.
@@ -138,7 +138,7 @@ Remaining work: milestones 3–4. Definition changes currently explain that hist
 
 Completed October 8, 2026:
 
-- Adapted the retained experiment into a small `AIClient` protocol and public streaming Responses adapter. Rechecked the official sign-in, session, inference, and preview documentation. Requests include explicit context, `store: false`, strict structured output, and only account-selected models; there is no API billing fallback.
+- Adapted the retained experiment into a small `AIClient` protocol and public streaming Responses adapter. Rechecked the official sign-in, session, inference, and preview documentation. Requests include explicit context, `store: false`, strict structured output, and the configured model for new runs and the saved model for resumed runs; there is no API billing fallback.
 - Added ChatGPT OAuth controls with ephemeral localhost callbacks, state/nonce/PKCE and signed ID-token verification, saved account registrations and stable host ID, protected atomic credential writes outside the repository/database, process-serialized rotating refresh, and sign-out with attempted remote revocation. Saved registrations support account selection, returning sign-in, and new account registration.
 - Added representative-description category proposals with editable drafts and explicit individual approval. Added all-history and filtered recalculation using current definitions and latest confirmed examples, bounded relevance ranking, minimized descriptions, and automatic application with assignment history and manual protection.
 - Added background execution, visible and durable batch progress, validated results and assignment IDs, serialized run creation/claim, and revision checks before application. Category/example changes conservatively skip stale results. Completed batches survive later failures and database reopening.
