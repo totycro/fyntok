@@ -62,7 +62,8 @@ def build_ai_panel(
         authorization = ui.link("Open ChatGPT sign-in", "#", new_tab=True)
         authorization.set_visibility(False)
         ui.label(f"AI model: {AI_MODEL}")
-        status = ui.label("Sign in with ChatGPT to use AI. Manual review is always available.")
+        connection = ui.label()
+        status = ui.label()
         last_active_account = auth.active_account()
 
         def refresh_accounts() -> None:
@@ -75,6 +76,17 @@ def build_ai_panel(
                     account.value = active
                 account.update()
                 last_active_account = active
+            connected = auth.is_connected(account.value)
+            connection.set_text(
+                "Connected to ChatGPT. Ready to use AI."
+                if connected
+                else "Sign in with ChatGPT to use AI. Manual review is always available."
+            )
+            login_button.set_text("Reconnect" if connected else "Continue with ChatGPT")
+            if connected and auth.pending is None and auth.login_error is None:
+                authorization.set_visibility(False)
+                if status.text == "Open ChatGPT sign-in, then return here to use AI.":
+                    status.set_text("")
 
         async def prepare_account() -> None:
             refresh_accounts()
@@ -110,6 +122,7 @@ def build_ai_panel(
                 logger.exception("Sign out failed (%s)", type(exc).__name__)
                 raise
             authorization.set_visibility(False)
+            refresh_accounts()
             status.set_text(
                 "Signed out."
                 if confirmed is True
@@ -121,8 +134,9 @@ def build_ai_panel(
             logger.debug("Sign out: completed; remote revocation confirmed=%s", confirmed)
 
         with ui.row():
-            ui.button("Continue with ChatGPT", on_click=login)
+            login_button = ui.button("Continue with ChatGPT", on_click=login)
             ui.button("Sign out", on_click=sign_out).props("flat")
+        refresh_accounts()
         proposals = ui.column().classes("w-full")
 
         async def propose() -> None:

@@ -83,6 +83,16 @@ class ChatGPTSession:
             data = self.load()
             return cast("str | None", data["active"])
 
+    def is_connected(self, client_id: str | None) -> bool:
+        """Check local session availability without refreshing or contacting OpenAI."""
+        with self.locked():
+            record = self.load()["accounts"].get(client_id, {})
+            return bool(
+                record.get("access_token")
+                and PERMISSION in record.get("scopes", [])
+                and (record.get("expires_at", 0) > time.time() + 60 or record.get("refresh_token"))
+            )
+
     def select(self, client_id: str | None) -> None:
         with self.locked():
             data = self.load()

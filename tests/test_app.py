@@ -11,7 +11,7 @@ from nicegui.testing.user_simulation import user_simulation
 
 from fyntok.ai import AI_MODEL, AIRequestError
 from fyntok.app import build_page
-from fyntok.auth import ChatGPTSession
+from fyntok.auth import PERMISSION, ChatGPTSession
 from fyntok.database import open_database
 from fyntok.importer import import_content
 from fyntok.manual import categories
@@ -403,6 +403,10 @@ def test_ui_refreshes_signed_in_account_and_selects_account_for_actions(
 
     def sign_out() -> bool:
         signed_out.append(auth.active_account())
+        with auth.locked():
+            data = auth.load()
+            data["accounts"][data["active"]].pop("access_token", None)
+            auth.save(data)
         return True
 
     monkeypatch.setattr(auth, "sign_out", sign_out)
@@ -426,7 +430,14 @@ def test_ui_refreshes_signed_in_account_and_selects_account_for_actions(
             # Simulate the callback completing while the dashboard remains open.
             with auth.locked():
                 data = auth.load()
-                data["accounts"]["second"] = {"subject": "second", "email": "second@example.com"}
+                data["accounts"]["second"] = {
+                    "subject": "second",
+                    "email": "second@example.com",
+                    "access_token": "synthetic-access",
+                    "refresh_token": "synthetic-refresh",
+                    "scopes": [PERMISSION],
+                    "expires_at": 0,
+                }
                 data["active"] = "second"
                 auth.save(data)
             await asyncio.sleep(0.6)
@@ -437,6 +448,9 @@ def test_ui_refreshes_signed_in_account_and_selects_account_for_actions(
             )
             assert account.value == "second"
             assert "second" in account.options
+            await user.should_see("Connected to ChatGPT. Ready to use AI.")
+            await user.should_see(kind=ui.button, content="Reconnect")
+            await user.should_not_see("Open ChatGPT sign-in, then return here to use AI.")
             user.find("Propose categories").click()
             await user.should_see("0 suggestions ready for review.")
             assert requested_accounts == ["second"]
@@ -445,11 +459,13 @@ def test_ui_refreshes_signed_in_account_and_selects_account_for_actions(
             user.find("Propose categories").click()
             await asyncio.sleep(0.1)
             assert requested_accounts == ["second", "first"]
+            await user.should_see(kind=ui.button, content="Continue with ChatGPT")
             with user:
                 account.value = "second"
             user.find("Sign out").click()
             await user.should_see("Signed out.")
             assert signed_out == ["second"]
+            await user.should_see(kind=ui.button, content="Continue with ChatGPT")
 
     try:
         asyncio.run(scenario())
