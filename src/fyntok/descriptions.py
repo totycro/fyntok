@@ -66,7 +66,7 @@ def _select_merchant(description: str, account: str) -> str:
 
 def parse_description(description: str, account: str = "") -> ParsedDescription:
     """Return a clean merchant name and a private-data-minimized description with city context."""
-    selected = _select_merchant(description, account)
+    selected = _select_merchant(description, account).replace("[ACCOUNT]", "")
     merchant, *locations = re.split(r"\\+", selected)
     minimized = _clean_merchant(merchant)
     name = _clean_merchant(re.sub(r"\[(?:ACCOUNT|EMAIL)\]", "", merchant))

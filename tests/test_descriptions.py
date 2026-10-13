@@ -41,7 +41,7 @@ from fyntok.descriptions import ParsedDescription, parse_description
             "/CNR/999999/DOC/99999999/12.34/20240101|OG/000000005|"
             "TESTATWWXXX AT000000000000000000 Beispiel Lieferdienst GmbH",
             "Beispiel Lieferdienst GmbH",
-            "[ACCOUNT] Beispiel Lieferdienst GmbH",
+            "Beispiel Lieferdienst GmbH",
             id="direct-debit-inline-iban",
         ),
         pytest.param(
@@ -90,7 +90,7 @@ from fyntok.descriptions import ParsedDescription, parse_description
             "SALDO BEISPIEL 999999999999 OG/000000012|"
             "TESTATWWXXX AT000000000000000000 Beispiel Betreiberfirma GmbH",
             "Beispiel Betreiberfirma GmbH",
-            "[ACCOUNT] Beispiel Betreiberfirma GmbH",
+            "Beispiel Betreiberfirma GmbH",
             id="invoice-transfer-inline-iban",
         ),
         pytest.param(
@@ -138,7 +138,7 @@ def test_csv_description_patterns(
             "Beispielbank kreditkarte account 200001 MC/000000001|Abrechnung Nr. 000000001",
             "account",
             "Beispielbank kreditkarte",
-            "Beispielbank kreditkarte [ACCOUNT]",
+            "Beispielbank kreditkarte",
         ),
         (
             "Beispielbank kreditkarte user@example.com 200001 MC/000000001|10",
@@ -160,31 +160,31 @@ def test_csv_description_patterns(
             "Bank | AT000000000000000000 / Beispiel Sonnenschutz und | 0000000001",
             "",
             "Beispiel Sonnenschutz und",
-            "[ACCOUNT] / Beispiel Sonnenschutz und",
+            "Beispiel Sonnenschutz und",
         ),
         (
             "Bank | account user@example.com Shop Reference: secret | 10",
             "account",
             "Shop",
-            "[ACCOUNT] [EMAIL] Shop",
+            "[EMAIL] Shop",
         ),
         (
             "DE00000000000000000000 user@example.com account 123456 Reference: secret",
             "account",
             "Unknown",
-            "[ACCOUNT] [EMAIL] [ACCOUNT]",
+            "[EMAIL]",
         ),
         (
             "AT00 0000 0000 0000 0000 DEMO",
             "",
             "DEMO",
-            "[ACCOUNT] DEMO",
+            "DEMO",
         ),
         (
             "GB00 TEST 0000 0000 0000 00 Example",
             "",
             "Example",
-            "[ACCOUNT] Example",
+            "Example",
         ),
         (
             r"Bank | EXAMPLE24 GMBH\\DRESDEN\01237|SPESEN: 0,00",
@@ -211,6 +211,14 @@ def test_csv_description_patterns(
         ("Shop | OG/000000001", "", "Shop", "Shop"),
         ("Shop | TESTATWWXXX", "", "Shop", "Shop"),
         ("TESTATWWXXX Example", "", "Example", "Example"),
+        ("AT000000000000000000", "", "Unknown", "Unknown merchant"),
+        ("account", "account", "Unknown", "Unknown merchant"),
+        (
+            r"Shop\\WIEN AT000000000000000000\9999",
+            "",
+            "Shop",
+            "Shop / WIEN",
+        ),
         ("10 | 11 | ", "", "Unknown", "Unknown merchant"),
         (" | ", "", "Unknown", "Unknown merchant"),
         ("", "", "Unknown", "Unknown merchant"),
