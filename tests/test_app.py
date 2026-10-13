@@ -32,7 +32,7 @@ def test_numeric_table_columns(tmp_path: Path) -> None:
     engine = open_database(tmp_path / "numeric-ui.sqlite3")
     amounts = ("-1000,01", "-10,00", "-2,00", "0,00", "2,00", "10,00", "1000,01")
     content = "".join(
-        f"a;Merchant {i};01.01.2024;01.01.2024;{amount};EUR\n" for i, amount in enumerate(amounts)
+        f"a;Merchant{i};01.01.2024;01.01.2024;{amount};EUR\n" for i, amount in enumerate(amounts)
     ).encode()
     import_content(engine, content, "numbers.csv")
     import_content(engine, content, "duplicates.csv")

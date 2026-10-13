@@ -16,34 +16,14 @@ from sqlalchemy.orm import Session
 
 from .ai import AIRequestError, Classifier, Proposer
 from .database import require_record
+from .descriptions import parse_description
 from .manual import _active, _assign, categories, save_category
-from .merchants import merchant_text
 from .models import CategorizationRun, Category, ConfirmedExample, RunItem, Transaction
 from .queries import Filters, transaction_rows
 
 DEFAULT_FILTERS = Filters()
 BATCH_SIZE = 25
 logger = logging.getLogger(__name__)
-
-
-def minimize_description(description: str, account: str = "") -> str:
-    """Select meaningful merchant text; redact common identifiers in free-form descriptions."""
-    text = merchant_text(description)
-    if account:
-        text = re.sub(r"(?<!\w)" + re.escape(account) + r"(?!\w)", "[ACCOUNT]", text)
-    text = re.sub(r"\b[A-Z]{2}\s*\d{2}(?:\s*[A-Z0-9]){10,30}\b", "[ACCOUNT]", text, flags=re.I)
-    text = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[EMAIL]", text)
-    text = re.sub(
-        (
-            "(?i)\\b(?:name|kontoinhaber|beneficiary|reference|referenz|mandat|"
-            "end.to.end|bic)\\s*[:=].*"
-        ),
-        "",
-        text,
-    )
-    text = re.sub(r"\d+", "", text)
-    text = re.sub(r"\\+", " / ", text)
-    return re.sub(r"\s+", " ", text).strip(" /")[:160] or "Unknown merchant"
 
 
 def category_context(engine: Engine) -> list[dict[str, Any]]:
@@ -58,7 +38,7 @@ def latest_examples(session: Session) -> list[dict[str, Any]]:
         {
             "example_id": e.transaction_id,
             "category_id": e.category_id,
-            "description": minimize_description(t.description, t.account),
+            "description": parse_description(t.description, t.account).minimized_description,
         }
         for e, t in session.execute(
             select(ConfirmedExample, Transaction)
@@ -84,7 +64,9 @@ def representative_descriptions(engine: Engine, limit: int = 120) -> list[str]:
             session.scalars(select(Transaction).order_by(Transaction.booking_date, Transaction.id))
         )
         descriptions = list(
-            dict.fromkeys(minimize_description(t.description, t.account) for t in rows)
+            dict.fromkeys(
+                parse_description(t.description, t.account).minimized_description for t in rows
+            )
         )
     if len(descriptions) <= limit:
         return descriptions
@@ -339,7 +321,9 @@ def _execute_run(
                     targets.append(
                         {
                             "transaction_id": t.id,
-                            "description": minimize_description(t.description, t.account),
+                            "description": parse_description(
+                                t.description, t.account
+                            ).minimized_description,
                         }
                     )
                     item.status, item.attempts = "running", item.attempts + 1

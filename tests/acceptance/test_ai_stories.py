@@ -163,6 +163,26 @@ def test_my_latest_decision_guides_new_imports_and_repeated_recalculation(
         assert request["confirmed_examples"][0]["category_id"] == household.groceries
 
 
+def test_imports_and_all_ai_inputs_use_shared_description_parsing(household: Household) -> None:
+    description = r"Bezahlung Karte MC/000000001|EXAMPLE MARKET DANKT 9999\\WIEN\9999|SPESEN: 0,00"
+    household.import_purchase(description, day=1)
+    household.import_purchase(description, day=2)
+    assert household.purchase(1)["merchant"] == "EXAMPLE MARKET"
+    assert household.purchase(1)["description"] == description
+
+    propose_categories(household.engine, household.advisor, "story-advisor")
+    assert household.advisor.requests[-1]["descriptions"] == ["EXAMPLE MARKET / WIEN"]
+
+    household.confirm(day=1, category=household.groceries)
+    result = household.recalculate_history()
+    request = household.advisor.requests[-1]
+    assert request["transactions"][0]["description"] == "EXAMPLE MARKET / WIEN"
+    assert request["confirmed_examples"][0]["description"] == "EXAMPLE MARKET / WIEN"
+    assert result["applied"] == 1 and result["skipped"] == 1
+    assert household.purchase(1)["protected"]
+    assert household.purchase(2)["category"] == "Groceries"
+
+
 def test_filtered_recalculation_only_revisits_the_selected_history(household: Household) -> None:
     """When I filter to supermarket purchases and recalculate,
     an unrelated pharmacy purchase keeps its previous assignment.

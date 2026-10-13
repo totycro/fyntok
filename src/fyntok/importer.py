@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from .merchants import merchant_text
+from .descriptions import parse_description
 from .models import Import, ImportRow, Transaction
 
 
@@ -26,11 +26,6 @@ class ImportResult:
     row_count: int
     inserted_count: int
     duplicate_count: int
-
-
-def merchant_label(description: str) -> str:
-    """A conservative display grouping, never a categorization rule."""
-    return merchant_text(description) or "Unknown"
 
 
 def parse_csv(content: bytes) -> list[dict[str, Any]]:
@@ -58,7 +53,7 @@ def parse_csv(content: bytes) -> list[dict[str, Any]]:
                     "original_fields": fields,
                     "account": fields[0],
                     "description": fields[1],
-                    "merchant": merchant_label(fields[1]),
+                    "merchant": parse_description(fields[1], fields[0]).merchant_name,
                     "booking_date": datetime.strptime(fields[2], "%d.%m.%Y").date(),
                     "value_date": datetime.strptime(fields[3], "%d.%m.%Y").date(),
                     "amount_cents": cents,

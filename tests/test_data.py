@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from fyntok.analysis import aggregate
 from fyntok.database import open_database, require_record
-from fyntok.importer import import_csv, merchant_label, parse_csv
+from fyntok.importer import import_content, import_csv, parse_csv
 from fyntok.models import (
     Assignment,
     CategorizationRun,
@@ -121,8 +121,8 @@ def test_amounts_and_quoted_fields() -> None:
         ),
         ("Bank | Shop | 10 | 11 | 12", "Shop"),
         ("Bank |  Café   Beispiel  | 12 | ", "Café Beispiel"),
-        ("Bank | Shop 24", "Shop 24"),
-        ("Beispielbank kreditkarte TEST shop | Shop 24", "Shop 24"),
+        ("Bank | Shop 24", "Shop"),
+        ("Beispielbank kreditkarte TEST shop | Shop 24", "Shop"),
         ("Bank | 7-Shop", "7-Shop"),
         ("123", "Unknown"),
         (" 10 | 11 | ", "Unknown"),
@@ -131,10 +131,40 @@ def test_amounts_and_quoted_fields() -> None:
     ],
 )
 def test_merchant_labels_use_meaningful_text(description: str, expected: str) -> None:
-    assert merchant_label(description) == expected
     parsed = parse_csv(f"a;{description};01.01.2024;01.01.2024;-1,00;EUR\n".encode("cp1252"))
     assert parsed[0]["merchant"] == expected
     assert parsed[0]["description"] == description
+
+
+def test_existing_merchant_labels_survive_reopening_and_duplicate_imports(tmp_path: Path) -> None:
+    path = tmp_path / "merchants.sqlite3"
+    content = (
+        r"a;Bank | EXAMPLE CARE-FIL. A112\\WIEN\1020 W;01.01.2024;01.01.2024;-1,00;EUR" + "\n"
+    ).encode()
+    engine = open_database(path)
+    import_content(engine, content, "bank.csv")
+    legacy_label = r"EXAMPLE CARE-FIL. A112\\WIEN\1020 W"
+    with Session(engine) as session, session.begin():
+        transaction = require_record(session.scalar(select(Transaction)))
+        assert transaction.merchant == "EXAMPLE CARE"
+        transaction.merchant = legacy_label
+        original_fields = transaction.original_fields
+    engine.dispose()
+
+    engine = open_database(path)
+    try:
+        duplicate = import_content(engine, content, "bank.csv")
+        assert duplicate.inserted_count == 0 and duplicate.duplicate_count == 1
+        with Session(engine) as session:
+            transaction = require_record(session.scalar(select(Transaction)))
+            assert transaction.merchant == legacy_label
+            assert transaction.original_fields == original_fields
+        new_content = content.replace(b"01.01.2024", b"02.01.2024")
+        assert import_content(engine, new_content, "bank.csv").inserted_count == 1
+        with Session(engine) as session:
+            assert set(session.scalars(select(Transaction.merchant))) == {legacy_label, "EXAMPLE CARE"}
+    finally:
+        engine.dispose()
 
 
 def test_sql_aggregation_uses_active_assignments_and_booking_date(
