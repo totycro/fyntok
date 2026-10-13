@@ -72,9 +72,68 @@ def columns(
 def build_page(
     engine: Engine, ai_client: AIClient | None = None, auth: ChatGPTSession | None = None
 ) -> None:
-    ui.label("fyntok").classes("text-3xl font-bold")
+    focus_target: ui.element | None = None
+
+    def open_tools(tab: str, opener: ui.element) -> None:
+        nonlocal focus_target
+        focus_target = opener
+        tools_tabs.value = tab
+        tools.open()
+
+    def restore_focus() -> None:
+        if focus_target is not None:
+            ui.run_javascript(f'document.getElementById("c{focus_target.id}")?.focus()')
+
+    with ui.row().classes("w-full items-center justify-between"):
+        ui.label("fyntok").classes("text-3xl font-bold")
+        with ui.row().classes("items-center gap-2"):
+            ui.button(
+                "Import CSV",
+                icon="upload",
+                on_click=lambda event: open_tools("import", event.sender),
+            ).props("outline no-caps")
+            ui.button(
+                "Categorize",
+                icon="auto_awesome",
+                on_click=lambda event: open_tools("categorization", event.sender),
+            ).props("outline no-caps")
+            activity = (
+                ui.button(on_click=lambda event: open_tools("categorization", event.sender))
+                .props("flat dense no-caps")
+                .classes("text-sm")
+                .mark("categorization-activity")
+            )
+            activity.set_visibility(False)
     ui.label("Explore your history and refine one transaction at a time.").classes("text-gray-600")
-    with ui.expansion("Import CSV", icon="upload").classes("w-full"):
+
+    # QDialog supplies Escape dismissal and focus trapping.
+    # Build it once outside refreshable results so closing or refreshing preserves edits.
+    ui.add_css(".data-tools-dialog .q-dialog__inner { padding: 0; }")
+    tools = (
+        ui.dialog()
+        .props("position=right full-height")
+        .classes("data-tools-dialog")
+        .mark("data-tools")
+    )
+    tools.on("hide", restore_focus)
+    with (
+        tools,
+        ui.card().classes("w-full sm:w-[560px] h-full rounded-none p-0").style("max-width: 100vw"),
+    ):
+        with ui.row().classes("w-full items-center justify-between px-6 pt-4"):
+            ui.label("Data tools").classes("text-xl font-semibold")
+            ui.button(icon="close", on_click=tools.close).props(
+                'flat round dense aria-label="Close data tools"'
+            ).mark("close-data-tools")
+        with ui.tabs().classes("w-full shrink-0") as tools_tabs:
+            ui.tab("import", label="Import", icon="upload")
+            ui.tab("categorization", label="Categorization", icon="auto_awesome")
+        tools_panels = ui.tab_panels(tools_tabs, value="import", animated=False).classes(
+            "w-full flex-1 overflow-auto"
+        )
+
+    with tools_panels, ui.tab_panel("import"):
+        ui.label("Import CSV").classes("text-xl font-semibold")
         ui.label(
             "Headerless CP1252 CSV; semicolon separators and German "
             "dates/amounts. Repeated exports reuse existing rows."
@@ -460,7 +519,12 @@ def build_page(
                     pagination=20,
                 ).classes("w-full")
 
-    build_ai_panel(engine, ai_client, auth, filters, refresh)
+    def show_activity(summary: str) -> None:
+        activity.set_text(summary)
+        activity.set_visibility(bool(summary))
+
+    with tools_panels, ui.tab_panel("categorization"):
+        build_ai_panel(engine, ai_client, auth, filters, refresh, show_activity)
     content()
     refresh()
 

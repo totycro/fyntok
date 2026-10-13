@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 from pathlib import Path
 from typing import Any, override
 
@@ -95,6 +96,108 @@ def poll_dashboard(user: User) -> None:
         for timer in user.find(ui.timer).elements:
             assert timer.callback is not None
             timer.callback()
+
+
+def test_data_tools_preserve_proposal_edits_when_reopened(tmp_path: Path) -> None:
+    engine = open_database(tmp_path / "tools.sqlite3")
+
+    class Advisor:
+        def propose(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
+            del model, payload
+            return {"categories": [{"name": "Food", "definition": "Groceries", "kind": "spending"}]}
+
+        def classify(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
+            del model, payload
+            raise NotImplementedError("This scenario only proposes categories.")
+
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(engine, Advisor(), ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            tools = user.find(marker="data-tools").elements.pop()
+            assert isinstance(tools, ui.dialog)
+            assert not tools.value
+            await user.should_see("0 matching transactions")
+            await user.should_not_see(marker="categorization-activity")
+            user.find(kind=ui.button, content="Categorize").click()
+            assert tools.value
+            panels = next(e for e in tools.descendants() if isinstance(e, ui.tab_panels))
+            assert panels.value == "categorization"
+            user.find("Propose categories").click()
+            await user.should_see("1 suggestions ready for review.")
+            user.find("Suggested name").clear().type("Weekly groceries")
+            user.find(marker="close-data-tools").click()
+            assert not tools.value
+            user.find(kind=ui.button, content="Import CSV").click()
+            assert panels.value == "import"
+            user.find(kind=ui.tab, content="Categorization").click()
+            assert panels.value == "categorization"
+            proposal = user.find("Suggested name").elements.pop()
+            assert isinstance(proposal, ui.input)
+            assert proposal.value == "Weekly groceries"
+            user.find("Approve category").click()
+            await user.should_see("Category approved and saved.")
+            assert "Weekly groceries" in {c["name"] for c in categories(engine)}
+            await user.should_not_see(marker="categorization-activity")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        engine.dispose()
+
+
+def test_categorization_continues_with_tools_closed(tmp_path: Path) -> None:
+    engine = open_database(tmp_path / "background-tools.sqlite3")
+    import_content(engine, b"a;Shop;01.01.2024;01.01.2024;-10,00;EUR\n", "bank.csv")
+    release = threading.Event()
+
+    class Advisor:
+        def propose(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
+            del model, payload
+            raise NotImplementedError("This scenario only categorizes transactions.")
+
+        def classify(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
+            del model
+            assert release.wait(timeout=10)
+            return {
+                "assignments": [
+                    {
+                        "transaction_id": t["transaction_id"],
+                        "category_id": "uncategorized",
+                        "reason": "Unclear",
+                    }
+                    for t in payload["transactions"]
+                ]
+            }
+
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(engine, Advisor(), ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            user.find(kind=ui.button, content="Categorize").click()
+            user.find("Recalculate categories — all transactions").click()
+            await user.should_see(marker="categorization-activity")
+            activity = user.find(marker="categorization-activity").elements.pop()
+            assert activity.props["label"] in {"Pending: 0 / 1", "Running: 0 / 1"}
+            user.find(marker="close-data-tools").click()
+            tools = user.find(marker="data-tools").elements.pop()
+            assert isinstance(tools, ui.dialog)
+            assert not tools.value
+            release.set()
+            await user.should_see("Completed: 1 / 1", retries=30)
+            assert not tools.value
+            assert transaction_rows(engine)[0]["source"] == "ai"
+            user.find(marker="categorization-activity").click()
+            assert tools.value
+            await user.should_see("Completed: 1 applied")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+        engine.dispose()
 
 
 def test_numeric_table_columns(tmp_path: Path) -> None:

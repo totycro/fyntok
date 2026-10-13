@@ -39,9 +39,11 @@ def build_ai_panel(
     auth: ChatGPTSession,
     filters: Callable[[], Filters],
     refresh: Callable[[], None],
+    on_status: Callable[[str], None],
 ) -> None:
     state: PanelState = {"busy": False, "running": False, "run_id": None, "last_progress": None}
-    with ui.expansion("AI categorization", icon="auto_awesome", value=True).classes("w-full"):
+    with ui.column().classes("w-full"):
+        ui.label("AI categorization").classes("text-xl font-semibold")
         ui.label(
             "Use your ChatGPT plan to propose categories and recalculate "
             "history. Individual corrections remain protected."
@@ -51,19 +53,28 @@ def build_ai_panel(
             "definitions, and relevant confirmed examples. Review definitions "
             "before sending."
         )
-        ui.link("ChatGPT usage and app access", "https://chatgpt.com/settings/usage", new_tab=True)
-        account = ui.select(
-            auth.accounts(),
-            label="ChatGPT account",
-            value=auth.active_account(),
-            clearable=True,
-            on_change=lambda: logger.debug("Select ChatGPT account: selection changed"),
-        ).classes("w-96")
-        authorization = ui.link("Open ChatGPT sign-in", "#", new_tab=True)
-        authorization.set_visibility(False)
-        ui.label(f"AI model: {AI_MODEL}")
         connection = ui.label()
-        status = ui.label()
+        status = ui.label().props("role=status aria-live=polite")
+        actions = ui.row().classes("w-full")
+        progress = ui.linear_progress(value=0).classes("w-full")
+        progress.set_visibility(False)
+        proposals = ui.column().classes("w-full")
+        with ui.expansion("ChatGPT account", icon="account_circle").classes(
+            "w-full"
+        ) as account_settings:
+            ui.link(
+                "ChatGPT usage and app access", "https://chatgpt.com/settings/usage", new_tab=True
+            )
+            account = ui.select(
+                auth.accounts(),
+                label="ChatGPT account",
+                value=auth.active_account(),
+                clearable=True,
+                on_change=lambda: logger.debug("Select ChatGPT account: selection changed"),
+            ).classes("w-full")
+            authorization = ui.link("Open ChatGPT sign-in", "#", new_tab=True)
+            authorization.set_visibility(False)
+            ui.label(f"AI model: {AI_MODEL}")
         last_active_account = auth.active_account()
 
         def refresh_accounts() -> None:
@@ -133,11 +144,14 @@ def build_ai_panel(
             )
             logger.debug("Sign out: completed; remote revocation confirmed=%s", confirmed)
 
-        with ui.row():
+        with account_settings, ui.row():
             login_button = ui.button("Continue with ChatGPT", on_click=login)
             ui.button("Sign out", on_click=sign_out).props("flat")
         refresh_accounts()
-        proposals = ui.column().classes("w-full")
+
+        def update_proposal_activity() -> None:
+            remaining = sum(isinstance(child, ui.card) for child in proposals.default_slot.children)
+            on_status(f"{remaining} suggestions to review" if remaining else "")
 
         async def propose() -> None:
             logger.debug("Propose categories: requested")
@@ -150,6 +164,7 @@ def build_ai_panel(
                 return
             state["busy"] = True
             status.set_text("Preparing category suggestions…")
+            on_status("Preparing suggestions…")
             try:
                 logger.debug(
                     "Propose categories: preparing descriptions and requesting AI suggestions"
@@ -190,6 +205,7 @@ def build_ai_panel(
                                         },
                                     )
                                     card.delete()
+                                    update_proposal_activity()
                                     refresh()
                                     ui.notify("Category approved and saved.", type="positive")
                                     logger.debug("Approve category: completed")
@@ -206,9 +222,12 @@ def build_ai_panel(
                                     "Dismiss category suggestion: removing suggestion from review"
                                 )
                                 card.delete()
+                                update_proposal_activity()
 
                             ui.button("Dismiss", on_click=dismiss).props("flat")
                 status.set_text(f"{len(suggestions)} suggestions ready for review.")
+                update_proposal_activity()
+                ui.notify(status.text, type="positive")
                 logger.debug("Propose categories: completed with %d suggestions", len(suggestions))
             except Exception as exc:
                 logger.exception("Propose categories failed (%s)", type(exc).__name__)
@@ -217,6 +236,8 @@ def build_ai_panel(
                     f"category creation remains available."
                     + (f" {exc}" if isinstance(exc, AIRequestError) else "")
                 )
+                on_status("Suggestions failed")
+                ui.notify(status.text, type="negative")
             finally:
                 state["busy"] = False
 
@@ -229,9 +250,14 @@ def build_ai_panel(
                     )
                 }
 
-        history = ui.select(
-            history_options(), label="Categorization run", on_change=lambda e: select_run(e.value)
-        ).classes("w-full")
+        with ui.expansion("Run history and recovery", icon="history").classes(
+            "w-full"
+        ) as run_settings:
+            history = ui.select(
+                history_options(),
+                label="Categorization run",
+                on_change=lambda e: select_run(e.value),
+            ).classes("w-full")
 
         def select_run(value: str | None) -> None:
             logger.debug("Select categorization run: requested")
@@ -260,11 +286,14 @@ def build_ai_panel(
                         p["applied"],
                         p["skipped"],
                     )
+                previous = state["last_progress"]
                 state["last_progress"] = p
                 history.options = history_options()
                 history.value = state["run_id"]
                 history.update()
+                progress.set_visibility(True)
                 progress.set_value(p["done"] / p["total"] if p["total"] else 1)
+                on_status(f"{p['status'].title()}: {p['done']} / {p['total']}")
                 status.set_text(
                     (
                         f"{p['status'].title()}: {p['applied']} applied, {p['skipped']} "
@@ -272,6 +301,20 @@ def build_ai_panel(
                     )
                     + (" " + p["error"] if p["error"] else "")
                 )
+
+                if (
+                    p != previous
+                    and p["status"] in {"completed", "failed", "cancelled"}
+                    and (
+                        state["running"]
+                        or (
+                            previous is not None
+                            and previous["id"] == p["id"]
+                            and previous["status"] in {"pending", "running"}
+                        )
+                    )
+                ):
+                    ui.notify(status.text, type="negative" if p["status"] == "failed" else "info")
 
         def cancel() -> None:
             logger.debug("Cancel selected run: requested")
@@ -354,7 +397,7 @@ def build_ai_panel(
                 poll()
                 refresh()
 
-        with ui.row():
+        with actions:
             ui.button("Propose categories", on_click=propose)
             ui.button(
                 "Recalculate categories — all transactions", on_click=lambda: recalculate(False)
@@ -362,15 +405,15 @@ def build_ai_panel(
             ui.button(
                 "Recalculate categories — current filters", on_click=lambda: recalculate(True)
             ).props("outline")
-        with ui.row():
+        with run_settings, ui.row():
             ui.button("Cancel selected run", on_click=cancel).props("outline")
             ui.button("Resume / recover selected run", on_click=resume).props("outline")
-        ui.label(
-            "Resume keeps the original model, selection, definitions, and "
-            "examples. After edits, start a fresh recalculation. Recovery "
-            "waits until any live worker has stopped."
-        )
-        progress = ui.linear_progress(value=0).classes("w-full")
+        with run_settings:
+            ui.label(
+                "Resume keeps the original model, selection, definitions, and "
+                "examples. After edits, start a fresh recalculation. Recovery "
+                "waits until any live worker has stopped."
+            )
         ui.timer(0.5, refresh_accounts)
         ui.timer(0.5, lambda: poll(False))
         with Session(engine) as session:
