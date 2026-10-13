@@ -38,6 +38,100 @@ def test_minimization_omits_bank_fields_and_common_identifiers() -> None:
     )
 
 
+# Patterns from the opening CSV rows, with synthetic merchants, identifiers, and dates.
+@pytest.mark.parametrize(
+    ("description", "expected"),
+    [
+        pytest.param(
+            r"Bezahlung Karte MC/000000001|BIOMARKT999 9999 K009 01.01. 12:34|"
+            r"BEISPIEL BIOMARKT\\WIEN\9999",
+            "BEISPIEL BIOMARKT / WIEN",
+            id="card-supermarket-location",
+        ),
+        pytest.param(
+            r"Bezahlung Karte MC/000000002|POS M9XX K009 01.01. 12:34|"
+            r"SUMUP *BEISPIELPRAXIS\\WIEN\9",
+            "SUMUP *BEISPIELPRAXIS / WIEN",
+            id="card-payment-processor",
+        ),
+        pytest.param(
+            r"Bezahlung Karte MC/000000003|E-COMM K009 01.01. 12:34|"
+            r"UZR*BEISPIELTICKET*DEMO\\WIEN\9999",
+            "UZR*BEISPIELTICKET*DEMO / WIEN",
+            id="ecommerce-ticket-processor",
+        ),
+        pytest.param(
+            r"Bezahlung Karte MC/000000004|POS 9999 K009 01.01. 12:34|"
+            r"BEISPIEL CAFE\\WIEN\9999",
+            "BEISPIEL CAFE / WIEN",
+            id="card-cafe",
+        ),
+        pytest.param(
+            "/CNR/999999/DOC/99999999/12.34/20240101|OG/000000005|"
+            "TESTATWWXXX AT000000000000000000 Beispiel Lieferdienst GmbH",
+            "TESTATWWXXX [ACCOUNT] Beispiel Lieferdienst GmbH",
+            id="direct-debit-inline-iban",
+        ),
+        pytest.param(
+            "Beispiel Mobil KdNr: 9999999 OG/000000006|"
+            "TESTATWWXXX AT000000000000000000|Beispiel Firma GmbH",
+            "Beispiel Firma GmbH",
+            id="direct-debit-customer-number",
+        ),
+        pytest.param(
+            r"Bezahlung Karte MC/000000007|MARKT 9999 K009 01.01. 12:34|"
+            r"BEISPIEL MARKT DANKT 9999\\WIEN\9999",
+            "BEISPIEL MARKT DANKT / WIEN",
+            id="card-merchant-branch-number",
+        ),
+        pytest.param(
+            "REF-EXAMPLE999999 OG/000000008|"
+            "TESTFRP1XXX FR0000000000000000000000000|Beispiel Medien GmbH",
+            "Beispiel Medien GmbH",
+            id="transfer-reference-and-foreign-iban",
+        ),
+        pytest.param(
+            r"Bezahlung Karte MC/000000009|DROGERIE-FIL. A999 9999 K009 01.01. 12:34|"
+            r"DROGERIE-FIL. A999\\WIEN\9999      W",
+            "DROGERIE-FIL. A / WIEN / W",
+            id="card-alphanumeric-branch-and-suffix",
+        ),
+        pytest.param(
+            r"Bezahlung Karte MC/000000010|POS 9999 K009 01.01. 12:34|"
+            r"BEISPIEL PIZZERIA\\WIEN\9999",
+            "BEISPIEL PIZZERIA / WIEN",
+            id="card-restaurant",
+        ),
+        pytest.param(
+            "MIETE 01/2024 OG/000000011|TESTATWWXXX AT000000000000000000|"
+            "Beispiel gemeinnutzige Wohnungsakt",
+            "Beispiel gemeinnutzige Wohnungsakt",
+            id="rent-transfer",
+        ),
+        pytest.param(
+            "SALDO BEISPIEL 999999999999 OG/000000012|"
+            "TESTATWWXXX AT000000000000000000 Beispiel Betreiberfirma GmbH",
+            "TESTATWWXXX [ACCOUNT] Beispiel Betreiberfirma GmbH",
+            id="invoice-transfer-inline-iban",
+        ),
+        pytest.param(
+            r"Bezahlung Karte MC/000000013|POS 9999 K009 01.01. 12:34|"
+            r"BEISPIEL DROGERIE DANKT 9999\\WIEN\9999",
+            "BEISPIEL DROGERIE DANKT / WIEN",
+            id="card-drugstore",
+        ),
+        pytest.param(
+            r"Bezahlung Karte MC/000000014|POS 9999 K009 01.01. 12:34|"
+            r"APOTHEKE BEISPIELVIERT\\WIEN\9",
+            "APOTHEKE BEISPIELVIERT / WIEN",
+            id="card-pharmacy",
+        ),
+    ],
+)
+def test_minimization_of_csv_description_patterns(description: str, expected: str) -> None:
+    assert minimize_description(description, "AT000000000000000000") == expected
+
+
 @pytest.mark.parametrize(
     ("description", "expected"),
     [
