@@ -7,7 +7,7 @@ from fyntok.descriptions import ParsedDescription, parse_description
 
 # Patterns from the opening CSV rows, with synthetic merchants, identifiers, and dates.
 @pytest.mark.parametrize(
-    ("description", "merchant_name", "minimized_description"),
+    ("description", "merchant_name", "cleaned_description"),
     [
         pytest.param(
             r"Bezahlung Karte MC/000000001|BIOMARKT999 9999 K009 01.01. 12:34|"
@@ -110,15 +110,15 @@ from fyntok.descriptions import ParsedDescription, parse_description
     ],
 )
 def test_csv_description_patterns(
-    description: str, merchant_name: str, minimized_description: str
+    description: str, merchant_name: str, cleaned_description: str
 ) -> None:
     assert parse_description(description, "AT000000000000000000") == ParsedDescription(
-        merchant_name, minimized_description
+        merchant_name, cleaned_description
     )
 
 
 @pytest.mark.parametrize(
-    ("description", "account", "merchant_name", "minimized_description"),
+    ("description", "account", "merchant_name", "cleaned_description"),
     [
         (
             "Beispielbank kreditkarte TEST 200001 MC/000000001|"
@@ -226,15 +226,15 @@ def test_csv_description_patterns(
     ],
 )
 def test_description_parsing(
-    description: str, account: str, merchant_name: str, minimized_description: str
+    description: str, account: str, merchant_name: str, cleaned_description: str
 ) -> None:
     assert parse_description(description, account) == ParsedDescription(
-        merchant_name, minimized_description
+        merchant_name, cleaned_description
     )
 
 
 @pytest.mark.parametrize(
-    ("description", "merchant_name", "minimized_description"),
+    ("description", "merchant_name", "cleaned_description"),
     [
         ("Zinsen HABEN BG/000000001", "Zinsen HABEN", "Zinsen HABEN"),
         ("Einbehaltene KESt BG/000000002", "Einbehaltene KESt", "Einbehaltene KESt"),
@@ -330,6 +330,6 @@ def test_description_parsing(
     ],
 )
 def test_bank_operations_and_order_references(
-    description: str, merchant_name: str, minimized_description: str
+    description: str, merchant_name: str, cleaned_description: str
 ) -> None:
-    assert parse_description(description) == ParsedDescription(merchant_name, minimized_description)
+    assert parse_description(description) == ParsedDescription(merchant_name, cleaned_description)

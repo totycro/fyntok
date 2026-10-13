@@ -88,6 +88,6 @@ def transaction_rows(engine: Engine, filters: Filters = DEFAULT_FILTERS) -> list
             row = dict(result)
             row["cleaned_description"] = parse_description(
                 row["description"], row.pop("account")
-            ).minimized_description
+            ).cleaned_description
             rows.append(row)
         return rows

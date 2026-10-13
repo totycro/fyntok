@@ -47,7 +47,7 @@ def build_ai_panel(
             "history. Individual corrections remain protected."
         )
         ui.label(
-            "AI receives minimized merchant descriptions, category "
+            "AI receives cleaned merchant descriptions, category "
             "definitions, and relevant confirmed examples. Review definitions "
             "before sending."
         )

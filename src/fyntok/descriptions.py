@@ -7,7 +7,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class ParsedDescription:
     merchant_name: str
-    minimized_description: str
+    cleaned_description: str
 
 
 def _redact(text: str, account: str) -> str:
@@ -95,11 +95,11 @@ def _select_merchant(description: str, account: str) -> str:
 
 
 def parse_description(description: str, account: str = "") -> ParsedDescription:
-    """Return a clean merchant name and a private-data-minimized description with city context."""
+    """Return a merchant name and cleaned city-context description with private data removed."""
     selected = _select_merchant(description, account).replace("[ACCOUNT]", "")
     merchant, *locations = re.split(r"\\+", selected)
-    minimized = _clean_merchant(merchant)
+    cleaned = _clean_merchant(merchant)
     name = _clean_merchant(re.sub(r"\[(?:ACCOUNT|EMAIL)\]", "", merchant))
     if locations and (city := _clean_merchant(locations[0])):
-        minimized = f"{minimized} / {city}" if minimized else city
-    return ParsedDescription(name or "Unknown", minimized[:160] or "Unknown merchant")
+        cleaned = f"{cleaned} / {city}" if cleaned else city
+    return ParsedDescription(name or "Unknown", cleaned[:160] or "Unknown merchant")

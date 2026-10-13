@@ -38,7 +38,7 @@ def latest_examples(session: Session) -> list[dict[str, Any]]:
         {
             "example_id": e.transaction_id,
             "category_id": e.category_id,
-            "description": parse_description(t.description, t.account).minimized_description,
+            "description": parse_description(t.description, t.account).cleaned_description,
         }
         for e, t in session.execute(
             select(ConfirmedExample, Transaction)
@@ -65,7 +65,7 @@ def representative_descriptions(engine: Engine, limit: int = 120) -> list[str]:
         )
         descriptions = list(
             dict.fromkeys(
-                parse_description(t.description, t.account).minimized_description for t in rows
+                parse_description(t.description, t.account).cleaned_description for t in rows
             )
         )
     if len(descriptions) <= limit:
@@ -323,7 +323,7 @@ def _execute_run(
                             "transaction_id": t.id,
                             "description": parse_description(
                                 t.description, t.account
-                            ).minimized_description,
+                            ).cleaned_description,
                         }
                     )
                     item.status, item.attempts = "running", item.attempts + 1
