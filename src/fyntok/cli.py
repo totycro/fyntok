@@ -21,6 +21,9 @@ def main() -> None:
     serve.add_argument("--port", type=int, default=8080)
     serve.add_argument("--reload", action="store_true", help="Reload on Python source changes")
     serve.add_argument(
+        "--trace-llm", action="store_true", help="Save LLM exchanges under data/llm-traces"
+    )
+    serve.add_argument(
         "--log-level",
         choices=["debug", "info", "warning", "error", "critical"],
         default="info",
@@ -38,7 +41,13 @@ def main() -> None:
         if args.command == "serve":
             from .app import serve
 
-            serve(engine, port=args.port, log_level=args.log_level, reload=args.reload)
+            serve(
+                engine,
+                port=args.port,
+                log_level=args.log_level,
+                reload=args.reload,
+                trace_dir=Path("data/llm-traces") if args.trace_llm else None,
+            )
             return
         result = (
             asdict(import_csv(engine, args.csv))

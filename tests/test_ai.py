@@ -58,8 +58,15 @@ def test_malformed_proposals_are_rejected() -> None:
 )
 @pytest.mark.parametrize("text_source", ["completion", "delta", "done", "delta_done", "all"])
 @pytest.mark.parametrize("operation", ["propose", "classify"])
+@pytest.mark.parametrize("tracing", [False, True])
 def test_subscription_transport_requires_a_completed_stream(
-    monkeypatch: pytest.MonkeyPatch, terminal: str, text_source: str, operation: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    terminal: str,
+    text_source: str,
+    operation: str,
+    tracing: bool,
 ) -> None:
     class Login:
         def active_account(self) -> str | None:
@@ -116,7 +123,9 @@ def test_subscription_transport_requires_a_completed_stream(
     monkeypatch.setattr(
         httpx, "Client", lambda **kwargs: factory(transport=httpx.MockTransport(respond), **kwargs)
     )
-    client = ResponsesClient(Login())
+    trace_dir = tmp_path / "traces"
+    caplog.set_level("INFO", logger="fyntok.llm_traces")
+    client = ResponsesClient(Login(), trace_dir=trace_dir if tracing else None)
     request_result = client.propose if operation == "propose" else client.classify
     if terminal == "response.completed":
         assert (
@@ -129,6 +138,28 @@ def test_subscription_transport_requires_a_completed_stream(
     assert body["store"] is False and body["stream"] is True
     assert body["model"] == "selected-model" and isinstance(body["input"], list)
     assert body["text"]["format"]["strict"] is True
+    if not tracing:
+        assert not trace_dir.exists()
+        return
+    directories = list(trace_dir.iterdir())
+    assert len(directories) == 1
+    directory = directories[0]
+    assert json.loads((directory / "request.json").read_text()) == body
+    # An interrupted stream with completion-only output never sends that output.
+    expected = "" if terminal == "interrupted" and text_source == "completion" else output
+    assert (directory / "response.txt").read_text() == expected
+    metadata = json.loads((directory / "metadata.json").read_text())
+    assert metadata["operation"] == operation
+    assert metadata["model"] == "selected-model"
+    assert metadata["http_status"] == 200
+    assert metadata["status"] == ("completed" if terminal == "response.completed" else "failed")
+    assert metadata["stream_status"] == terminal.removeprefix("response.")
+    assert metadata["finished_at"] >= metadata["started_at"]
+    assert metadata["duration_seconds"] >= 0
+    assert metadata["run_id"] is None and metadata["batch_number"] is None
+    assert str(directory.resolve()) in caplog.text
+    assert output not in caplog.text
+    assert all("test-token" not in file.read_text() for file in directory.iterdir())
 
 
 @pytest.mark.parametrize(
@@ -142,7 +173,10 @@ def test_subscription_transport_requires_a_completed_stream(
     ],
 )
 def test_completed_stream_reports_safe_output_errors(
-    monkeypatch: pytest.MonkeyPatch, content: list[dict[str, str]], error: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    content: list[dict[str, str]],
+    error: str,
 ) -> None:
     class Login:
         def active_account(self) -> str | None:
@@ -163,8 +197,14 @@ def test_completed_stream_reports_safe_output_errors(
         httpx, "Client", lambda **kwargs: factory(transport=httpx.MockTransport(respond), **kwargs)
     )
     with pytest.raises(ValueError, match=error) as caught:
-        ResponsesClient(Login()).propose("model", {})
+        ResponsesClient(Login(), trace_dir=tmp_path).propose("model", {})
     assert "private" not in str(caught.value)
+    directory = next(tmp_path.iterdir())
+    assert (directory / "response.txt").read_text() == "".join(
+        part.get("text", part.get("refusal", "")) for part in content
+    )
+    metadata = json.loads((directory / "metadata.json").read_text())
+    assert metadata["status"] == "failed" and metadata["exception_type"] == "ValueError"
 
 
 def test_completed_batches_survive_a_later_failure_and_reopening(

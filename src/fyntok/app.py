@@ -529,12 +529,18 @@ def build_page(
     refresh()
 
 
-def serve(engine: Engine, port: int = 8080, log_level: str = "info", reload: bool = False) -> None:
+def serve(
+    engine: Engine,
+    port: int = 8080,
+    log_level: str = "info",
+    reload: bool = False,
+    trace_dir: Path | None = None,
+) -> None:
     from .ai import ResponsesClient
     from .auth import ChatGPTSession
 
     auth = ChatGPTSession()
-    ai_client = ResponsesClient(auth)
+    ai_client = ResponsesClient(auth, trace_dir=trace_dir)
 
     @ui.page("/")
     def index() -> None:

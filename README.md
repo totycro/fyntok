@@ -55,6 +55,34 @@ The app binds to `127.0.0.1` and needs no AI credentials for these workflows. Us
 `fyntok serve` logs the database path, server startup/shutdown, HTTP requests, and import/manual-action outcomes to the terminal. Use `fyntok serve --log-level debug` to trace UI actions, including AI proposals, sign-in, recalculation, cancellation/recovery, category edits, transaction corrections, filters, and navigation. Actions log what is starting, why they are blocked, and their results; run progress is logged when it changes. Recalculation workers also log each AI batch before sending it, response validation time, committed applied/skipped counts, and the final run summary. Batch logs include run IDs and counts without transaction descriptions or AI response bodies. Handled UI errors and background categorization failures log full tracebacks at ERROR level, including the original exception message, with the default logging settings. Use `--log-level warning` to reduce routine output while retaining errors.
 
 
+To save the actual LLM queries and responses, explicitly enable tracing:
+
+```bash
+uv run --locked fyntok serve --log-level debug --trace-llm
+```
+
+Tracing works independently of the log level and is disabled by default, including in `just dev`.
+Each proposal or classification request gets a unique UTC-timestamped directory relative to the
+working directory, ordered chronologically by name:
+
+```text
+data/llm-traces/2026-10-13T14-35-02.123456Z_classify_<request-id>/
+  request.json
+  response.txt
+  metadata.json
+```
+
+`request.json` contains the complete request body: model, instructions, input, and output schema.
+Authentication headers and credentials are excluded. `response.txt` preserves assembled model
+output, including malformed JSON, refusal text, partial output from failed/interrupted streams,
+or an HTTP error response body. Streaming events are not saved individually. `metadata.json`
+records UTC start/end times, duration, model, operation, HTTP/stream status, exception type,
+and categorization run ID/batch number where applicable. Its final status reflects the AI
+transport and JSON parsing, rather than whether database assignments were subsequently applied.
+Normal INFO logs link to trace directories without printing request or response bodies.
+Trace-writing errors emit a warning and do not stop categorization. Files remain until manually
+deleted and the default `data/` location is ignored by Git.
+
 Under **AI categorization**, click **Continue with ChatGPT**, open the sign-in link, grant ChatGPT plan usage, and return to propose categories or recalculate transactions. New requests use `gpt-6-luna`, fixed in the `AI_MODEL` constant in `src/fyntok/ai.py`. If it is unavailable, requests fail visibly without switching models; edit that constant manually to change it. The app starts an ephemeral loopback callback listener on `127.0.0.1`; run the app on the same computer as the browser for sign-in. Select a saved account to reauthorize it, or clear the account selector to register another account. Registrations and the stable host ID persist across restarts and sign-out. Credentials live in `~/.config/fyntok/accounts.json` with owner-only permissions, outside the transaction database and repository. Refresh is serialized across processes with Unix file locks; this integration currently targets Linux/macOS. **Sign out** attempts remote session revocation and clears the selected account's local tokens. If remote revocation cannot be confirmed, the app says so and links to ChatGPT Settings.
 
 **Propose categories** samples up to 120 distinct cleaned descriptions distributed across booking history. Review and edit each suggestion, then click **Approve category** to save it; dismiss unwanted suggestions. Proposals never add categories automatically. **Recalculate categories — all transactions** performs initial categorization or revisits earlier AI assignments. **Recalculate categories — current filters** freezes the matching selection when the run starts. Both automatically apply validated results, preserve assignment history, and update the dashboard when finished. Use individual correction and undo as before.
@@ -67,7 +95,7 @@ Runs process 25 transactions per request in a background worker. Progress and ea
 
 After a process crash or restart, select the unfinished run and click **Resume / recover selected run**. No database manipulation is needed. A nonblocking Unix file lock next to the database (`<database>.ai.lock`) prevents recovery while a worker is alive in any tab/process; the OS releases it when the worker exits. Keep the lock file in place. To abandon an interrupted run and start fresh, cancel it first. Run history includes failed and cancelled runs, so older work remains selectable. Local SQLite files and Unix locks are required; network-mounted databases and Windows are not supported.
 
-Session, access, and subscription-limit failures stop the run with retained batches and no automatic retries or billing switch. Plan-limit messages link through **ChatGPT usage and app access**; check usage and resume when access is restored. Reauthorize revoked/expired sessions with the saved account. Terminal refresh-token errors clear unusable tokens but retain registration; temporary network/routing errors preserve credentials. Known server error codes and HTTP statuses are shown without saving server messages that might contain private inputs. Unknown failures are summarized safely. This follows the [official errors and recovery guidance](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery).
+Session, access, and subscription-limit failures stop the run with retained batches and no automatic retries or billing switch. Plan-limit messages link through **ChatGPT usage and app access**; check usage and resume when access is restored. Reauthorize revoked/expired sessions with the saved account. Terminal refresh-token errors clear unusable tokens but retain registration; temporary network/routing errors preserve credentials. Known server error codes and HTTP statuses are shown without saving raw server messages in SQLite or normal logs; explicitly enabled LLM trace files retain HTTP error response bodies. Unknown failures are summarized safely. This follows the [official errors and recovery guidance](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery).
 
 The reliability implementation is tested, but human-reviewed live model accuracy remains an open milestone 4 acceptance criterion. See [the evaluation record](evaluations/REPORT.md) for the candidate synthetic sample and reproducible paired evaluation command.
 

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from .ai import AIRequestError, Classifier, Proposer
 from .database import require_record
 from .descriptions import parse_description
+from .llm_traces import trace_batch
 from .manual import _active, _assign, categories, save_category
 from .models import CategorizationRun, Category, ConfirmedExample, RunItem, Transaction
 from .queries import Filters, transaction_rows
@@ -342,7 +343,10 @@ def _execute_run(
                 len(payload["confirmed_examples"]),
             )
             request_started = monotonic()
-            assignments = validate_assignments(client.classify(model, payload), targets, snapshot)
+            with trace_batch(run_id, batch_number):
+                assignments = validate_assignments(
+                    client.classify(model, payload), targets, snapshot
+                )
             logger.debug(
                 "Categorization run %s, batch %d: response validated in %.2fs; assignments=%d",
                 run_id,
