@@ -61,6 +61,7 @@ def columns(
             column["align"] = "right"
             column["classes"] = "tabular-nums"
         if n == "description":
+            column["field"] = "cleaned_description"
             column["style"] = (
                 "max-width: 24rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap"
             )
@@ -272,6 +273,9 @@ def build_page(
         logger.debug("Transaction details: opening editor and assignment history")
         with ui.dialog() as dialog, ui.card().classes("w-full max-w-4xl"):
             ui.label("Transaction details").classes("text-xl")
+            ui.label("Cleaned description").classes("font-semibold")
+            ui.label(row["cleaned_description"]).classes("whitespace-pre-wrap")
+            ui.label("Full description").classes("font-semibold")
             ui.label(row["description"]).classes("whitespace-pre-wrap")
             ui.label(
                 f"Booking {row['booking_date']} · Value {row['value_date']} · "
@@ -382,7 +386,10 @@ def build_page(
                     pagination=20,
                 ).classes("w-full")
             with ui.tab_panel(transactions):
-                ui.label("Click a row to correct that transaction or view its history.")
+                ui.label(
+                    "Click a row to view its full description, correct that transaction, "
+                    "or view its history."
+                )
                 display = [
                     dict(
                         r,

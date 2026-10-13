@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, override
 
 import pytest
-from nicegui import ui
+from nicegui import events, ui
 from nicegui.testing import User
 from nicegui.testing.user_simulation import user_simulation
 
@@ -16,7 +16,77 @@ from fyntok.auth import PERMISSION, ChatGPTSession
 from fyntok.database import open_database
 from fyntok.importer import import_content
 from fyntok.manual import categories
-from fyntok.queries import transaction_rows
+from fyntok.queries import Filters, transaction_rows
+
+
+@pytest.mark.parametrize(
+    ("description", "cleaned"),
+    [
+        (r"Bezahlung Karte MC/000000001|EXAMPLE MARKET DANKT 9999\\WIEN\9999", "EXAMPLE MARKET / WIEN"),
+        ("MC/000000002|private-account Café", "Café"),
+        (" | ", "Unknown merchant"),
+        ("Simple shop", "Simple shop"),
+    ],
+)
+def test_cleaned_transaction_description_ui(tmp_path: Path, description: str, cleaned: str) -> None:
+    engine = open_database(tmp_path / "descriptions-ui.sqlite3")
+    import_content(
+        engine,
+        f"private-account;{description};01.01.2024;02.01.2024;-10,00;EUR\n".encode("cp1252"),
+        "synthetic.csv",
+    )
+
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(engine, auth=ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            user.find("Transactions").click()
+            table = next(
+                t
+                for t in user.find(ui.table).elements
+                if "description" in {c["name"] for c in t.columns}
+            )
+            column = next(c for c in table.columns if c["name"] == "description")
+            assert column["label"] == "Description"
+            assert column["field"] == "cleaned_description"
+            assert column["sortable"]
+            assert table.rows[0][column["field"]] == cleaned
+            assert table.rows[0]["description"] == description
+            assert "account" not in table.rows[0]
+            await user.should_not_see("Full description")
+            # Only declared columns are rendered; the original stays in row data for details.
+            assert all(
+                table.rows[0][c["field"]] != description
+                for c in table.columns
+                if description != cleaned
+            )
+            with user:
+                assert user.client is not None
+                listener = next(
+                    listener
+                    for listener in table._event_listeners.values()
+                    if listener.type == "rowClick"
+                )
+                events.handle_event(
+                    listener.handler,
+                    events.GenericEventArguments(
+                        sender=table, client=user.client, args=[{}, table.rows[0], 0]
+                    ),
+                )
+            await user.should_see("Full description")
+            await user.should_see("Cleaned description")
+            assert any(label.text == cleaned for label in user.find(ui.label).elements)
+            assert any(label.text == description for label in user.find(ui.label).elements)
+
+    try:
+        row = transaction_rows(engine, Filters(search=description))[0]
+        assert row["description"] == description
+        assert row["cleaned_description"] == cleaned
+        assert "account" not in row
+        asyncio.run(scenario())
+    finally:
+        engine.dispose()
 
 
 def poll_dashboard(user: User) -> None:

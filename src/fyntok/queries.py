@@ -9,6 +9,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Select
 
+from .descriptions import parse_description
 from .models import Assignment, Category, Transaction
 
 
@@ -61,6 +62,7 @@ def transaction_rows(engine: Engine, filters: Filters = DEFAULT_FILTERS) -> list
         select(
             t.id,
             t.description,
+            t.account,
             t.merchant,
             t.booking_date,
             t.value_date,
@@ -79,9 +81,13 @@ def transaction_rows(engine: Engine, filters: Filters = DEFAULT_FILTERS) -> list
         .outerjoin(restored, restored.id == a.restored_assignment_id)
     )
     with engine.connect() as connection:
-        return [
-            dict(r)
-            for r in connection.execute(
-                filters.apply(query).order_by(t.booking_date.desc(), t.id)
-            ).mappings()
-        ]
+        rows: list[dict[str, Any]] = []
+        for result in connection.execute(
+            filters.apply(query).order_by(t.booking_date.desc(), t.id)
+        ).mappings():
+            row = dict(result)
+            row["cleaned_description"] = parse_description(
+                row["description"], row.pop("account")
+            ).minimized_description
+            rows.append(row)
+        return rows
