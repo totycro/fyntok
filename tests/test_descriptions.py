@@ -231,3 +231,105 @@ def test_description_parsing(
     assert parse_description(description, account) == ParsedDescription(
         merchant_name, minimized_description
     )
+
+
+@pytest.mark.parametrize(
+    ("description", "merchant_name", "minimized_description"),
+    [
+        ("Zinsen HABEN BG/000000001", "Zinsen HABEN", "Zinsen HABEN"),
+        ("Einbehaltene KESt BG/000000002", "Einbehaltene KESt", "Einbehaltene KESt"),
+        ("  Zinsen HABEN    BG/000000003  ", "Zinsen HABEN", "Zinsen HABEN"),
+        ("BG/000000004", "Unknown", "Unknown merchant"),
+        ("-", "Unknown", "Unknown merchant"),
+        (" , . / - ", "Unknown", "Unknown merchant"),
+        (r"Bezahlung Karte MC/000000005|-\\WIEN\9999", "Unknown", "Unknown merchant"),
+        (
+            "Auszahlung Karte MC/000000006|AUTOMAT K009 01.01. 12:34",
+            "Bargeldabhebung",
+            "Bargeldabhebung",
+        ),
+        (
+            "Auszahlung Karte MC/000000007|AUTOMAT EDAT9999 K009 01.01. 12:34",
+            "Bargeldabhebung",
+            "Bargeldabhebung",
+        ),
+        ("AUTOMAT K009 01.01. 12:34", "Bargeldabhebung", "Bargeldabhebung"),
+        ("BANKOMAT K009 01.01. 12:34", "Bargeldabhebung", "Bargeldabhebung"),
+        (
+            "Auszahlung Karte MC/000000011|BANKOMAT K009 01.01. 12:34",
+            "Bargeldabhebung",
+            "Bargeldabhebung",
+        ),
+        (
+            "Auszahlung Karte MC/000000012|ATM 9999,00 XXX K009 01.01. 12:34",
+            "Bargeldabhebung",
+            "Bargeldabhebung",
+        ),
+        (
+            "SB-Eigenerlag BG/000000008|01.01.2024 UM 12:34 / 0999 SB-Gerät Beispielbank FIL. 999",
+            "Bargeldeinzahlung",
+            "Bargeldeinzahlung",
+        ),
+        (
+            r"Bezahlung Karte MC/000000009|EXAMPLE RAIL TICKET AUTOMAT\\WIEN\9999",
+            "EXAMPLE RAIL TICKET AUTOMAT",
+            "EXAMPLE RAIL TICKET AUTOMAT / WIEN",
+        ),
+        ("ACME_AT_TEST-9999-X", "ACME", "ACME"),
+        ("ACME_AT_TEST-DEMO", "ACME", "ACME"),
+        ("ACME_AT_TEST123", "ACME", "ACME"),
+        ("ACME_AT_1234", "ACME", "ACME"),
+        ("ACME_US_SUPPORT", "ACME_US_SUPPORT", "ACME_US_SUPPORT"),
+        ("MADE_IN_ITALY", "MADE_IN_ITALY", "MADE_IN_ITALY"),
+        ("ACME_AT_TEST_REF", "ACME_AT_TEST_REF", "ACME_AT_TEST_REF"),
+        ("ACME_US___", "ACME_US___", "ACME_US___"),
+        ("BIKE24_DE_SUPPORT", "BIKE24_DE_SUPPORT", "BIKE24_DE_SUPPORT"),
+        (
+            "ACME US ACME_US_SUPPORT",
+            "ACME US ACME_US_SUPPORT",
+            "ACME US ACME_US_SUPPORT",
+        ),
+        ("OTHER_DE_TEST-9999-X", "OTHER", "OTHER"),
+        ("BIKE24_FR_ORDER-123", "EXAMPLE24", "EXAMPLE24"),
+        ("Brand.Name_GB_ORDER-123", "Brand.Name", "Brand.Name"),
+        ("ACME_AT_", "ACME", "ACME"),
+        ("OTHER DE OTHER_DE_TEST-9999-X", "OTHER", "OTHER"),
+        ("ACME_AT", "ACME_AT", "ACME_AT"),
+        ("ACME_COUNTRY_REFERENCE", "ACME_COUNTRY_REFERENCE", "ACME_COUNTRY_REFERENCE"),
+        (
+            "ACME AT OTHER_AT_TEST-9999-X",
+            "ACME AT OTHER_AT_TEST-9999-X",
+            "ACME AT OTHER_AT_TEST-9999-X",
+        ),
+        (
+            "ACME DE ACME_AT_TEST-9999-X",
+            "ACME DE ACME_AT_TEST-9999-X",
+            "ACME DE ACME_AT_TEST-9999-X",
+        ),
+        ("acme_at_test-9999-x", "acme", "acme"),
+        ("ACME", "ACME", "ACME"),
+        ("ACME AT", "ACME AT", "ACME AT"),
+        (
+            r"Bezahlung Karte MC/000000010|E-COMM D009 01.01. 12:34|"
+            r"ACME AT ACME_AT_\\WIEN\9",
+            "ACME",
+            "ACME / WIEN",
+        ),
+        (
+            r"Bank | SUMUP *ACME_AT_TEST-9999-X\\WIEN\9999",
+            "ACME",
+            "ACME / WIEN",
+        ),
+        ("ACMEWARE", "ACMEWARE", "ACMEWARE"),
+        ("ACME MARKET", "ACME MARKET", "ACME MARKET"),
+        (
+            "SHOP ACME_AT_TEST-9999-X",
+            "SHOP ACME_AT_TEST-9999-X",
+            "SHOP ACME_AT_TEST-9999-X",
+        ),
+    ],
+)
+def test_bank_operations_and_order_references(
+    description: str, merchant_name: str, minimized_description: str
+) -> None:
+    assert parse_description(description) == ParsedDescription(merchant_name, minimized_description)

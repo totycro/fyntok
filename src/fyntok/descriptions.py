@@ -37,27 +37,57 @@ def _redact(text: str, account: str) -> str:
 
 
 def _clean_merchant(text: str) -> str:
+    text = re.sub(r"(?i)\b(?:BG|MC|OG|FE)/\d+\b", "", text).strip()
     text = re.sub(r"(?i)^SUMUP\s*\*\s*", "", text)
+    # Recognize merchant_country_reference tokens and their duplicated display
+    # prefixes. Require the whole field to match and a digit or hyphen in a
+    # nonempty reference so ordinary underscore-separated names survive.
+    # Anonymized originals: "ACME_AT_X7Y2-9999-A" and "ACME AT ACME_AT_" -> "ACME".
+    if order := re.fullmatch(
+        r"(?i)(?P<name>[^\W_]+(?:[.-][^\W_]+)*)"
+        r"(?: (?P<country>[A-Z]{2}) (?P=name)_(?P=country)_|_[A-Z]{2}_)"
+        r"(?P<reference>[A-Z0-9_-]*)",
+        text,
+    ):
+        reference = order.expand(r"\g<reference>")
+        if not reference or re.search(r"[0-9-]", reference):
+            text = order.expand(r"\g<name>")
     text = re.sub(r"(?i)-FIL\.\s*[A-Z]\d+\b", "", text)
     text = re.sub(r"(?i)\s+DANKT(?:\s+\d+)?$", "", text)
     # Standalone numbers are branch/reference metadata; brand digits survive.
     text = re.sub(r"(?<!\S)\d+(?!\S)", "", text)
-    return re.sub(r"\s+", " ", text).strip(" /,")
+    text = re.sub(r"\s+", " ", text).strip(" /,")
+    return text if re.search(r"[^\W\d_]", text) else ""
 
 
 def _select_merchant(description: str, account: str) -> str:
     segments = [re.sub(r"\s+", " ", part).strip() for part in description.split("|")]
     if statement := re.fullmatch(r"(.+ kreditkarte \S+) \d{6} MC/\d+", segments[0]):
         return _redact(segments[0][: statement.end(1)], account)
+    header = _clean_merchant(segments[0]).casefold()
+    if header == "auszahlung karte" and any(
+        re.match(r"(?i)^(?:AUTOMAT|BANKOMAT|ATM)\b", segment) for segment in segments[1:]
+    ):
+        return "Bargeldabhebung"
+    if header == "sb-eigenerlag" and any(
+        re.search(r"(?i)\bSB-Gerät\b", segment) for segment in segments[1:]
+    ):
+        return "Bargeldeinzahlung"
+    if len(segments) == 1 and re.fullmatch(
+        r"(?i)(?:AUTOMAT|BANKOMAT|ATM)\s+(?:\S+\s+)*[KD]\d{3}"
+        r"\s+\d{2}\.\d{2}\.\s+\d{2}:\d{2}",
+        segments[0],
+    ):
+        return "Bargeldabhebung"
     fallback = ""
     for segment in reversed(segments):
         if not segment or segment.isdigit() or re.match(r"(?i)^SPESEN\s*:", segment):
             continue
-        if re.fullmatch(r"(?i)(?:Bezahlung Karte\s+)?(?:MC|OG|FE)/\d+", segment):
+        if re.fullmatch(r"(?i)(?:Bezahlung Karte\s+)?(?:MC|OG|FE|BG)/\d+", segment):
             continue
         redacted = _redact(segment, account)
         meaningful = re.sub(r"\[(?:ACCOUNT|EMAIL)\]", "", redacted)
-        if re.search(r"[^\W\d_]", meaningful):
+        if _clean_merchant(re.split(r"\\+", meaningful)[0]):
             return redacted
         if not fallback and re.search(r"\[(?:ACCOUNT|EMAIL)\]", redacted):
             fallback = redacted
