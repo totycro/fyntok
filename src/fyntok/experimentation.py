@@ -62,7 +62,7 @@ def content_hash(value: object) -> str:
 
 
 def export_review(database: Path, output: Path, *, limit: int = 50, seed: int = 17) -> None:
-    """Read-only export with round-robin coverage of category/repetition/conflict strata."""
+    """Read-only export covering assigned categories, then repetition/conflict strata."""
     if not 1 <= limit <= 50:
         raise ValueError("Choose between 1 and 50 distinct descriptions.")
     if output.exists() or output.with_suffix(".snapshot.json").exists():
@@ -112,7 +112,30 @@ def export_review(database: Path, output: Path, *, limit: int = 50, seed: int = 
     rng = random.Random(seed)  # noqa: S311 - Reproducible sampling, not security randomness.
     for pool in strata.values():
         rng.shuffle(pool)
+    labels_by_description = {
+        description: {r["candidate_category"] for r in rows} - {""}
+        for description, rows in groups.items()
+    }
+    uncovered = set().union(*labels_by_description.values())
+    missing_categories = sorted(set(names.values()) - uncovered)
+    coverage_pool = list(groups)
+    rng.shuffle(coverage_pool)
     chosen: list[str] = []
+    while uncovered:
+        description = max(
+            coverage_pool,
+            key=lambda description: len(labels_by_description[description] & uncovered),
+        )
+        if len(chosen) >= limit:
+            raise ValueError(
+                "Limit is too small to cover every assigned category; increase --limit."
+            )
+        chosen.append(description)
+        uncovered -= labels_by_description[description]
+        coverage_pool.remove(description)
+    chosen_set = set(chosen)
+    for key, pool in strata.items():
+        strata[key] = [description for description in pool if description not in chosen_set]
     while len(chosen) < limit and any(strata.values()):
         for key in sorted(strata):
             if strata[key] and len(chosen) < limit:
@@ -122,11 +145,13 @@ def export_review(database: Path, output: Path, *, limit: int = 50, seed: int = 
     selected = []
     for description in chosen:
         rows = groups[description]
-        # Include different existing labels before filling the three-row allowance.
+        # Keep every existing label, even when a conflicting group has more than three.
         first_by_label = {r["candidate_category"]: r for r in reversed(rows)}
         distinct = list(first_by_label.values())
         ids = {r["id"] for r in distinct}
-        selected.extend((distinct + [r for r in rows if r["id"] not in ids])[:3])
+        selected.extend(
+            (distinct + [r for r in rows if r["id"] not in ids])[: max(3, len(distinct))]
+        )
     target_ids = {r["id"] for r in selected}
     snapshot = {
         "version": 1,
@@ -154,6 +179,8 @@ def export_review(database: Path, output: Path, *, limit: int = 50, seed: int = 
             for row in selected
         )
     print(f"Exported {len(selected)} rows / {len(chosen)} descriptions to {output}")
+    if missing_categories:
+        print("Categories without assigned transactions: " + ", ".join(missing_categories))
 
 
 def prepare_review(review: Path, output: Path, reviewer: str) -> None:

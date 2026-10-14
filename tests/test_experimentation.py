@@ -162,6 +162,87 @@ def test_review_roundtrip_does_not_modify_database(tmp_path: Path) -> None:
         prepare_review(review, frozen, "Reviewer")
 
 
+@pytest.fixture
+def export_database(tmp_path: Path) -> Path:
+    database = tmp_path / "export.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            "CREATE TABLE categories (id, name, definition, kind, archived);"
+            "CREATE TABLE transactions (id, description, account);"
+            "CREATE TABLE assignments (transaction_id, category_id, active);"
+            "CREATE TABLE confirmed_examples (transaction_id, category_id, confirmed_at);"
+        )
+        connection.executemany(
+            "INSERT INTO categories VALUES (?, ?, '', 'spending', ?)",
+            [(name, name, 0) for name in ("Food", "Shopping", "Travel", "Health", "Empty")]
+            + [("Archived", "Archived", 1)],
+        )
+        connection.executemany(
+            "INSERT INTO transactions VALUES (?, ?, '')",
+            [(name, "Shared merchant") for name in ("Food", "Shopping", "Travel", "Health")]
+            + [("unassigned", "Unassigned merchant"), ("archived", "Archived merchant")],
+        )
+        connection.executemany(
+            "INSERT INTO assignments VALUES (?, ?, ?)",
+            [(name, name, 1) for name in ("Food", "Shopping", "Travel", "Health")]
+            + [("archived", "Archived", 1), ("unassigned", "Empty", 0)],
+        )
+        connection.execute("INSERT INTO confirmed_examples VALUES ('Food', 'Food', '2026-01-01')")
+    return database
+
+
+def test_export_covers_all_assigned_categories_including_conflicts(
+    export_database: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    original = export_database.read_bytes()
+    review = tmp_path / "review.csv"
+    export_review(export_database, review, limit=1)
+    snapshot = json.loads(review.with_suffix(".snapshot.json").read_text())
+    rows = snapshot["cases"]
+    assert {r["candidate_category"] for r in rows} == {"Food", "Shopping", "Travel", "Health"}
+    assert len(rows) == 4
+    assert len({r["description"] for r in rows}) == 1
+    assert snapshot["examples"] == []
+    assert "Categories without assigned transactions: Empty" in capsys.readouterr().out
+    assert export_database.read_bytes() == original
+    repeated = tmp_path / "repeated.csv"
+    export_review(export_database, repeated, limit=1)
+    assert repeated.read_bytes() == review.read_bytes()
+
+
+def test_export_fills_remaining_limit_without_duplicate_rows(
+    export_database: Path, tmp_path: Path
+) -> None:
+    review = tmp_path / "review.csv"
+    export_review(export_database, review, limit=3)
+    snapshot = json.loads(review.with_suffix(".snapshot.json").read_text())
+    rows = snapshot["cases"]
+    assert len(rows) == 6
+    assert len({r["id"] for r in rows}) == 6
+    assert len({r["description"] for r in rows}) == 3
+    assert {r["candidate_category"] for r in rows} == {"Food", "Shopping", "Travel", "Health", ""}
+
+
+def test_export_rejects_limit_that_cannot_cover_categories(
+    export_database: Path, tmp_path: Path
+) -> None:
+    with sqlite3.connect(export_database) as connection:
+        connection.execute("UPDATE transactions SET description=id")
+    review = tmp_path / "review.csv"
+    with pytest.raises(ValueError, match="too small to cover every assigned category"):
+        export_review(export_database, review, limit=3)
+    assert not review.exists()
+    assert not review.with_suffix(".snapshot.json").exists()
+    export_review(export_database, review, limit=4)
+    snapshot = json.loads(review.with_suffix(".snapshot.json").read_text())
+    assert {r["candidate_category"] for r in snapshot["cases"]} == {
+        "Food",
+        "Shopping",
+        "Travel",
+        "Health",
+    }
+
+
 def test_dataset_rejects_edits_and_held_out_leakage(tmp_path: Path, sample: dict[str, Any]) -> None:
     path = tmp_path / "dataset.json"
     sample["examples"][0]["example_id"] = "row-1"
