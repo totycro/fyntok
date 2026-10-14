@@ -410,11 +410,11 @@ def build_page(
             ui.label(str(exc)).classes("text-red-700")
             return
         logger.debug("Refresh results: displaying %d matching transactions", len(rows))
-        ui.label(f"{len(rows):,} matching transactions").classes("text-xl")
+        ui.label(f"{len(rows):,} matching transactions in the transaction list").classes("text-xl")
         ui.label(
-            "Spending is positive; income, internal transfers and "
-            "Uncategorized are separate. Transfers and Uncategorized show "
-            "signed net values. Currencies are separate series."
+            "Internal transfers are excluded from statistics and remain in the transaction list. "
+            "Spending is positive; income and Uncategorized are separate. "
+            "Uncategorized shows signed net values. Currencies are separate series."
         )
         with ui.tabs(on_change=select_tab).classes("w-full") as tabs:
             dashboard = ui.tab("Analysis")

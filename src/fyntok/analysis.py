@@ -24,8 +24,8 @@ def aggregate(
 ) -> list[dict[str, Any]]:
     """Monthly category totals are also the category trend series.
 
-    Unassigned rows stay uncategorized regardless of sign. Assigned transfer
-    categories take precedence; other categorized credits count as income.
+    Internal transfers are excluded from all totals and counts. Unassigned rows
+    stay uncategorized regardless of sign; other categorized credits count as income.
     net_cents is signed; outgoing_cents and incoming_cents are positive magnitudes.
     """
     if by not in {"monthly", "trends", "merchant"}:
@@ -35,7 +35,6 @@ def aggregate(
     category_name = func.coalesce(c.name, "Uncategorized").label("category_name")
     bucket = case(
         (func.coalesce(c.kind, "uncategorized") == "uncategorized", "uncategorized"),
-        (c.kind == "transfer", "internal_transfer"),
         (c.kind == "income", "income"),
         (t.amount_cents > 0, "income"),
         else_="spending",
@@ -57,6 +56,7 @@ def aggregate(
         .select_from(t)
         .outerjoin(a, and_(a.transaction_id == t.id, a.active.is_(True)))
         .outerjoin(c, c.id == a.category_id)
+        .where(func.coalesce(c.kind, "uncategorized") != "transfer")
     )
     if start is not None:
         query = query.where(t.booking_date >= start)

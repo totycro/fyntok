@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any, override
 
+import plotly.graph_objects as go
 import pytest
 from nicegui import events, ui
 from nicegui.testing import User
@@ -16,7 +17,7 @@ from fyntok.app import build_page
 from fyntok.auth import PERMISSION, ChatGPTSession
 from fyntok.database import open_database
 from fyntok.importer import import_content
-from fyntok.manual import categories
+from fyntok.manual import categories, correct_transaction, save_category
 from fyntok.queries import Filters, transaction_rows
 
 
@@ -96,6 +97,43 @@ def poll_dashboard(user: User) -> None:
         for timer in user.find(ui.timer).elements:
             assert timer.callback is not None
             timer.callback()
+
+
+def test_internal_transfers_remain_in_table_but_not_statistics(tmp_path: Path) -> None:
+    engine = open_database(tmp_path / "transfers-ui.sqlite3")
+    import_content(
+        engine,
+        b"a;Own account;01.01.2024;02.01.2024;-10,00;EUR\n",
+        "synthetic.csv",
+    )
+    transfer = save_category(engine, "Own accounts", "Between my accounts", "transfer")
+    correct_transaction(engine, transaction_rows(engine)[0]["id"], transfer)
+
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(engine, auth=ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            await user.should_see("1 matching transactions in the transaction list")
+            await user.should_see("Internal transfers are excluded from statistics")
+            for plot in user.find(ui.plotly).elements:
+                assert isinstance(plot.figure, go.Figure)
+                assert not plot.figure.data
+            summaries = next(t for t in user.find(ui.table).elements if t.row_key == "key")
+            assert summaries.rows == []
+            user.find("Transactions").click()
+            table = next(
+                t
+                for t in user.find(ui.table).elements
+                if "description" in {c["name"] for c in t.columns}
+            )
+            assert len(table.rows) == 1
+            assert table.rows[0]["category_id"] == transfer
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        engine.dispose()
 
 
 def test_data_tools_preserve_proposal_edits_when_reopened(tmp_path: Path) -> None:

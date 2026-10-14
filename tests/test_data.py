@@ -178,6 +178,8 @@ def test_sql_aggregation_uses_active_assignments_and_booking_date(
                 row("Food", "-10,00"),
                 row("Pay", "20,00"),
                 row("Transfer", "-30,00"),
+                row("Transfer credit", "30,00", booking="01.02.2024"),
+                row("USD transfer", "-3,00", currency="USD"),
                 row("Unknown", "-40,00"),
                 row("Unknown credit", "50,00"),
                 row("USD food", "-2,00", currency="USD"),
@@ -194,11 +196,20 @@ def test_sql_aggregation_uses_active_assignments_and_booking_date(
         )
         session.flush()
         for t in session.scalars(select(Transaction)):
-            if t.description in {"Food", "Pay", "Transfer", "USD food"}:
+            if t.description in {
+                "Food",
+                "Pay",
+                "Transfer",
+                "Transfer credit",
+                "USD transfer",
+                "USD food",
+            }:
                 category = {
                     "Food": "food",
                     "Pay": "salary",
                     "Transfer": "transfer",
+                    "Transfer credit": "transfer",
+                    "USD transfer": "transfer",
                     "USD food": "food",
                 }[t.description]
                 session.add(Assignment(transaction_id=t.id, category_id=category, source="manual"))
@@ -213,14 +224,21 @@ def test_sql_aggregation_uses_active_assignments_and_booking_date(
     eur = {x["bucket"]: x for x in totals if x["currency"] == "EUR"}
     assert eur["spending"]["outgoing_cents"] == 1000
     assert eur["income"]["incoming_cents"] == 2000
-    assert eur["internal_transfer"]["net_cents"] == -3000
+    assert "internal_transfer" not in {x["bucket"] for x in totals}
     assert eur["uncategorized"]["net_cents"] == 1000
     assert eur["uncategorized"]["transaction_count"] == 2
     assert aggregate(engine, by="trends") == totals
-    assert sum(x["transaction_count"] for x in aggregate(engine, by="merchant")) == 6
+    assert sum(x["transaction_count"] for x in aggregate(engine, by="merchant")) == 5
     assert aggregate(engine, start=date(2024, 2, 1)) == []
     assert aggregate(engine, end=date(2024, 1, 30)) == []
     assert len(aggregate(engine, category_id="food", merchant="Food")) == 1
+    for grouping in ["monthly", "trends", "merchant"]:
+        results = aggregate(engine, by=grouping)
+        assert sum(x["transaction_count"] for x in results) == 5
+        assert sum(x["net_cents"] for x in results) == 1800
+        assert sum(x["outgoing_cents"] for x in results) == 5200
+        assert sum(x["incoming_cents"] for x in results) == 7000
+        assert aggregate(engine, by=grouping, category_id="transfer") == []
 
 
 def test_history_examples_and_run_progress_survive_reload(engine: Engine, tmp_path: Path) -> None:

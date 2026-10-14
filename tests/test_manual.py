@@ -147,12 +147,16 @@ def test_invalid_category_changes_are_atomic(engine: Engine) -> None:
 
 def test_table_and_aggregates_share_filters(engine: Engine) -> None:
     food = save_category(engine, "Food", "")
+    transfer = save_category(engine, "Own accounts", "Between my accounts", "transfer")
     row = next(r for r in transaction_rows(engine) if r["booking_date"] == date(2024, 1, 1))
     correct_transaction(engine, row["id"], food)
+    transfer_row = next(r for r in transaction_rows(engine) if r["description"] == "Pay")
+    correct_transaction(engine, transfer_row["id"], transfer)
     for f in [
         Filters(start=date(2024, 2, 1)),
         Filters(end=date(2024, 1, 31)),
         Filters(category_id=food),
+        Filters(category_id=transfer),
         Filters(merchant="Supermarket"),
         Filters(search="Pay"),
         Filters(source="manual"),
@@ -170,10 +174,14 @@ def test_table_and_aggregates_share_filters(engine: Engine) -> None:
         ),
     ]:
         rows = transaction_rows(engine, f)
+        statistical_rows = [r for r in rows if r["category_id"] != transfer]
         for grouping in ["monthly", "trends", "merchant"]:
             totals = aggregate(engine, by=grouping, filters=f)
-            assert sum(r["transaction_count"] for r in totals) == len(rows)
-            assert sum(r["net_cents"] for r in totals) == sum(r["amount_cents"] for r in rows)
+            assert sum(r["transaction_count"] for r in totals) == len(statistical_rows)
+            assert sum(r["net_cents"] for r in totals) == sum(
+                r["amount_cents"] for r in statistical_rows
+            )
+    assert len(transaction_rows(engine, Filters(category_id=transfer))) == 1
     with pytest.raises(ValueError):
         transaction_rows(engine, Filters(start=date(2025, 1, 1), end=date(2024, 1, 1)))
 

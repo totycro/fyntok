@@ -17,7 +17,7 @@ The main workflow is to import several years of transactions, then repeatedly im
 - Preserve original transaction data, store amounts as integer cents. 
 - Show monthly category totals and transaction counts, category trends, merchant summaries, and a filterable transaction table. For now do not worry about refunds or reimbursements.
 - Use the first date column as booking date for monthly aggregation; retain both date columns.
-- Show outgoing spending as positive amounts, with income, internal transfers, and uncategorized transactions separately.
+- Show outgoing spending as positive amounts, with income and uncategorized transactions separately. Exclude categorized internal transfers from all statistics while keeping them in the transaction list.
 - Calculate financial totals deterministically in SQL.
 
 ## Iterative refinement workflow
