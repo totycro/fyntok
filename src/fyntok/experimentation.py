@@ -62,7 +62,7 @@ def content_hash(value: object) -> str:
 
 
 def export_review(database: Path, output: Path, *, limit: int = 50, seed: int = 17) -> None:
-    """Read-only export covering assigned categories, then repetition/conflict strata."""
+    """Read-only category/stratum sample supplemented with every current manual choice."""
     if not 1 <= limit <= 50:
         raise ValueError("Choose between 1 and 50 distinct descriptions.")
     if output.exists() or output.with_suffix(".snapshot.json").exists():
@@ -77,10 +77,14 @@ def export_review(database: Path, output: Path, *, limit: int = 50, seed: int = 
         ]
         names = {c["id"]: c["name"] for c in categories}
         groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        manual_ids: set[str] = set()
         for row in connection.execute(
-            "SELECT t.id, t.description, t.account, a.category_id FROM transactions t "
+            "SELECT t.id, t.description, t.account, a.category_id, a.source, a.protected "
+            "FROM transactions t "
             "LEFT JOIN assignments a ON a.transaction_id=t.id AND a.active=1 ORDER BY t.id"
         ):
+            if row["source"] == "manual" or row["protected"]:
+                manual_ids.add(row["id"])
             description = parse_description(row["description"], row["account"]).cleaned_description
             groups[description].append(
                 {
@@ -142,12 +146,20 @@ def export_review(database: Path, output: Path, *, limit: int = 50, seed: int = 
                 chosen.append(strata[key].pop())
     if not chosen:
         raise ValueError("Database contains no transactions.")
+    chosen_set = set(chosen)
+    chosen.extend(
+        description
+        for description, rows in groups.items()
+        if description not in chosen_set and any(r["id"] in manual_ids for r in rows)
+    )
     selected = []
     for description in chosen:
         rows = groups[description]
         # Keep every existing label, even when a conflicting group has more than three.
         first_by_label = {r["candidate_category"]: r for r in reversed(rows)}
         distinct = list(first_by_label.values())
+        ids = {r["id"] for r in distinct}
+        distinct.extend(r for r in rows if r["id"] in manual_ids and r["id"] not in ids)
         ids = {r["id"] for r in distinct}
         selected.extend(
             (distinct + [r for r in rows if r["id"] not in ids])[: max(3, len(distinct))]

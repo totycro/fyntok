@@ -39,7 +39,12 @@ with an active transaction assignment, then sampling across category labels,
 repeats, and conflicts. Categories without assigned transactions are reported.
 If `--limit` is too small for category coverage, export fails before writing files.
 Each description contributes up to three rows, or more when needed to retain
-every conflicting category label. The sample is intentionally diagnostic,
+every conflicting category label. Export additionally includes every transaction
+with a current manual or protected assignment, including manual choices retained
+by undo or category merges. These mandatory rows can exceed both `--limit` and
+the three-row allowance; superseded choices remain in history rather than becoming
+review targets. All exported transaction IDs are excluded from confirmed examples.
+The sample is intentionally diagnostic,
 not a prevalence-weighted estimate of all spending. Every expected label needs
 review, including any candidate copied from an existing assignment. Use exact
 saved category names; leave descriptions and row IDs unchanged. Notes stay local

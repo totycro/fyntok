@@ -128,12 +128,12 @@ def test_review_roundtrip_does_not_modify_database(tmp_path: Path) -> None:
         connection.executescript(
             "CREATE TABLE categories (id, name, definition, kind, archived);"
             "CREATE TABLE transactions (id, description, account);"
-            "CREATE TABLE assignments (transaction_id, category_id, active);"
+            "CREATE TABLE assignments (transaction_id, category_id, active, source, protected);"
             "CREATE TABLE confirmed_examples (transaction_id, category_id, confirmed_at);"
             "INSERT INTO categories VALUES ('food', 'Food', 'Food purchases', 'spending', 0);"
             "INSERT INTO transactions VALUES ('one', 'Market', 'private-account');"
             "INSERT INTO transactions VALUES ('two', 'Market', 'private-account');"
-            "INSERT INTO assignments VALUES ('one', 'food', 1);"
+            "INSERT INTO assignments VALUES ('one', 'food', 1, 'ai', 0);"
             "INSERT INTO confirmed_examples VALUES ('one', 'food', '2026-01-01');"
         )
     original = database.read_bytes()
@@ -169,7 +169,7 @@ def export_database(tmp_path: Path) -> Path:
         connection.executescript(
             "CREATE TABLE categories (id, name, definition, kind, archived);"
             "CREATE TABLE transactions (id, description, account);"
-            "CREATE TABLE assignments (transaction_id, category_id, active);"
+            "CREATE TABLE assignments (transaction_id, category_id, active, source, protected);"
             "CREATE TABLE confirmed_examples (transaction_id, category_id, confirmed_at);"
         )
         connection.executemany(
@@ -183,7 +183,7 @@ def export_database(tmp_path: Path) -> Path:
             + [("unassigned", "Unassigned merchant"), ("archived", "Archived merchant")],
         )
         connection.executemany(
-            "INSERT INTO assignments VALUES (?, ?, ?)",
+            "INSERT INTO assignments (transaction_id, category_id, active) VALUES (?, ?, ?)",
             [(name, name, 1) for name in ("Food", "Shopping", "Travel", "Health")]
             + [("archived", "Archived", 1), ("unassigned", "Empty", 0)],
         )
@@ -241,6 +241,52 @@ def test_export_rejects_limit_that_cannot_cover_categories(
         "Travel",
         "Health",
     }
+
+
+@pytest.mark.parametrize("repeated", [False, True])
+def test_export_includes_all_current_manual_choices_beyond_sample_limits(
+    export_database: Path, tmp_path: Path, *, repeated: bool
+) -> None:
+    manual_ids = {f"manual-{index:02}" for index in range(55)}
+    with sqlite3.connect(export_database) as connection:
+        connection.executemany(
+            "INSERT INTO transactions VALUES (?, ?, '')",
+            [
+                (tid, "Manual merchant" if repeated else f"Manual merchant {tid}")
+                for tid in sorted(manual_ids)
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO assignments VALUES (?, 'Food', 1, 'manual', 0)",
+            [(tid,) for tid in sorted(manual_ids)],
+        )
+        # Undo and category merges preserve manual protection with a different source.
+        connection.execute(
+            "UPDATE assignments SET source='undo', protected=1 WHERE transaction_id='manual-53'"
+        )
+        connection.execute(
+            "UPDATE assignments SET source='system', protected=1 WHERE transaction_id='manual-54'"
+        )
+        connection.execute("INSERT INTO assignments VALUES ('unassigned', 'Food', 0, 'manual', 1)")
+        connection.executemany(
+            "INSERT INTO confirmed_examples VALUES (?, 'Food', '2026-01-01')",
+            [(tid,) for tid in sorted(manual_ids)],
+        )
+    original = export_database.read_bytes()
+    review = tmp_path / "review.csv"
+    export_review(export_database, review, limit=1)
+    snapshot = json.loads(review.with_suffix(".snapshot.json").read_text())
+    rows = snapshot["cases"]
+    exported_ids = {r["id"] for r in rows}
+    assert manual_ids <= exported_ids
+    assert "unassigned" not in exported_ids
+    assert len(rows) == len(exported_ids)
+    assert {r["candidate_category"] for r in rows} == {"Food", "Shopping", "Travel", "Health"}
+    assert len({r["description"] for r in rows}) == (2 if repeated else 56)
+    with review.open(newline="") as stream:
+        assert {r["id"] for r in csv.DictReader(stream)} == exported_ids
+    assert snapshot["examples"] == []
+    assert export_database.read_bytes() == original
 
 
 def test_dataset_rejects_edits_and_held_out_leakage(tmp_path: Path, sample: dict[str, Any]) -> None:
