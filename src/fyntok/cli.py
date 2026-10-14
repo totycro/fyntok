@@ -17,7 +17,8 @@ def main() -> None:
     importer.add_argument("csv", type=Path)
     analysis = commands.add_parser("analyze")
     analysis.add_argument("--by", choices=["monthly", "trends", "merchant"], default="monthly")
-    serve = commands.add_parser("serve", help="Open the localhost manual application")
+    serve = commands.add_parser("serve", help="Open the manual application")
+    serve.add_argument("--host", default="127.0.0.1", help="Server bind address")
     serve.add_argument("--port", type=int, default=8080)
     serve.add_argument("--reload", action="store_true", help="Reload on Python source changes")
     serve.add_argument(
@@ -43,6 +44,7 @@ def main() -> None:
 
             serve(
                 engine,
+                host=args.host,
                 port=args.port,
                 log_level=args.log_level,
                 reload=args.reload,

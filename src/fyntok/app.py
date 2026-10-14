@@ -535,6 +535,7 @@ def serve(
     log_level: str = "info",
     reload: bool = False,
     trace_dir: Path | None = None,
+    host: str = "127.0.0.1",
 ) -> None:
     from .ai import ResponsesClient
     from .auth import ChatGPTSession
@@ -547,10 +548,10 @@ def serve(
         with ui.column().classes("w-full max-w-screen-2xl mx-auto p-6"):
             build_page(engine, ai_client, auth)
 
-    logger.info("Starting fyntok at http://127.0.0.1:%d", port)
+    logger.info("Starting fyntok at http://%s:%d", host, port)
     try:
         ui.run(
-            host="127.0.0.1",
+            host=host,
             port=port,
             title="fyntok",
             reload=reload,

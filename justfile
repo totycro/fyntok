@@ -20,7 +20,7 @@ format:
     uv run --locked ruff format .
 
 dev:
-    uv run --locked python -m fyntok.cli serve --reload --log-level debug
+    uv run --locked python -m fyntok.cli serve --host 0.0.0.0 --reload --log-level debug
 
 # Install the pinned local evaluator (requires Node >=22.22).
 experiment-install:
@@ -44,4 +44,4 @@ experiment-report directory:
     uv run --locked python -m fyntok.experimentation report {{quote(directory)}}
 
 experiment-view:
-    PROMPTFOO_CONFIG_DIR="$PWD/data/experiments/promptfoo" PROMPTFOO_DISABLE_TELEMETRY=1 node --require ./experiments/categorization/loopback.cjs experiments/categorization/node_modules/.bin/promptfoo view --no
+    PROMPTFOO_CONFIG_DIR="$PWD/data/experiments/promptfoo" PROMPTFOO_DISABLE_TELEMETRY=1 node --require ./experiments/categorization/viewer-bind.cjs experiments/categorization/node_modules/.bin/promptfoo view --no

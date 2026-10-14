@@ -19,7 +19,8 @@ just experiment-view
 The smoke test uses a synthetic, offline-only fixture and scripted responses.
 It verifies Promptfoo's provider, scoring, saved history, and exports without
 authentication or model calls. It is not model accuracy evidence. The viewer
-binds to localhost; saved history is under ignored `data/experiments/promptfoo/`.
+binds to `0.0.0.0` for remote access; saved history is under ignored
+`data/experiments/promptfoo/`.
 Sharing and telemetry are disabled by the supplied commands.
 
 Prepare a private benchmark:

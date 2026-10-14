@@ -15,7 +15,7 @@ uv run --locked fyntok analyze --by merchant
 uv run --locked pytest -q
 ```
 
-For development, run `just dev` (requires [just](https://just.systems/)) with debug logging enabled. Python changes under
+For development, run `just dev` (requires [just](https://just.systems/)) with debug logging enabled and bound to `0.0.0.0:8080`. Python changes under
 `src/fyntok` automatically restart the server. Saved SQLite data persists, but browser UI state
 may reset. Normal `fyntok serve` runs without reload. To enable reload with a custom database or
 port, use `uv run --locked python -m fyntok.cli --database /path/to/file.sqlite3 serve --reload --port 8081`.
@@ -50,7 +50,7 @@ Use **Categories** to create a category, edit its name/definition/financial type
 
 In **Transactions**, click one row to see both dates, its assignment source, protection status, and assignment history. **Confirm individual category** changes only that transaction and replaces its latest confirmed example. There is no bulk correction or merchant assignment rule. **Undo latest assignment change** walks back the transaction's assignment changes, appends an audit record, and restores the previous manual protection/example (or removes the example when restoring an AI/unassigned state). An undo that would restore a merged/deleted category is refused; choose an existing category explicitly instead. Category lifecycle operations themselves have no undo button. Stale editors are rejected using transaction/category revisions; reopen the editor after another tab changes a record.
 
-The app binds to `127.0.0.1` and needs no AI credentials for these workflows. Use `fyntok serve --port 8081` for a different port. Changes persist immediately in the selected database. The UI test uses NiceGUI's built-in user simulator to exercise upload, category editing/deletion, row correction, undo, and filtering; it does not replace a visual browser check.
+The app defaults to `127.0.0.1` and needs no AI credentials for these workflows. Use `fyntok serve --host 0.0.0.0` to listen on all interfaces, or `fyntok serve --port 8081` for a different port. Changes persist immediately in the selected database. The UI test uses NiceGUI's built-in user simulator to exercise upload, category editing/deletion, row correction, undo, and filtering; it does not replace a visual browser check.
 
 `fyntok serve` logs the database path, server startup/shutdown, HTTP requests, and import/manual-action outcomes to the terminal. Use `fyntok serve --log-level debug` to trace UI actions, including AI proposals, sign-in, recalculation, cancellation/recovery, category edits, transaction corrections, filters, and navigation. Actions log what is starting, why they are blocked, and their results; run progress is logged when it changes. Recalculation workers also log each AI batch before sending it, response validation time, committed applied/skipped counts, and the final run summary. Batch logs include run IDs and counts without transaction descriptions or AI response bodies. Handled UI errors and background categorization failures log full tracebacks at ERROR level, including the original exception message, with the default logging settings. Use `--log-level warning` to reduce routine output while retaining errors.
 
