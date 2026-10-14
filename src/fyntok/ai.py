@@ -234,6 +234,7 @@ class ResponsesClient:
                         )
                     if event_type == "response.completed":
                         completed = event["response"]
+                        trace.metadata["usage"] = completed.get("usage")
                         trace.stream_status = "completed"
             if self.session.active_account() != account:
                 raise RuntimeError("ChatGPT account changed during the request.")

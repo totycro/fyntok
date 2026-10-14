@@ -46,6 +46,23 @@ def complete(output: str = '{"categories": []}') -> dict[str, Any]:
     }
 
 
+def test_completed_usage_is_retained_without_changing_classifier_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    event = complete()
+    usage = {
+        "input_tokens": 40,
+        "output_tokens": 12,
+        "total_tokens": 52,
+        "input_tokens_details": {"cached_tokens": 20},
+    }
+    event["response"]["usage"] = usage
+    mock_transport(monkeypatch, lambda _request: stream_response([event]))
+    assert ResponsesClient(Login(), tmp_path).propose("model", {}) == {"categories": []}
+    metadata = json.loads(next(tmp_path.glob("*/metadata.json")).read_text())
+    assert metadata["usage"] == usage
+
+
 def test_http_error_body_is_saved_only_in_trace_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "reviewer": "Scripted synthetic integration expectations; not human accuracy evidence",
+  "offline_only": true,
+  "categories": [
+    {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "name": "Groceries",
+      "definition": "Food for home.",
+      "kind": "spending"
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000002",
+      "name": "Shopping",
+      "definition": "Other retail.",
+      "kind": "spending"
+    }
+  ],
+  "cases": [
+    {
+      "id": "20000000-0000-4000-8000-000000000001",
+      "description": "Example Market",
+      "expected_category_id": "10000000-0000-4000-8000-000000000001"
+    },
+    {
+      "id": "20000000-0000-4000-8000-000000000002",
+      "description": "Example Market",
+      "expected_category_id": "10000000-0000-4000-8000-000000000002"
+    },
+    {
+      "id": "20000000-0000-4000-8000-000000000003",
+      "description": "Example Bakery",
+      "expected_category_id": "10000000-0000-4000-8000-000000000001"
+    }
+  ],
+  "examples": [],
+  "hash": "3c4fc1bec60b9addccc5f83973e232bcd65604742c639894bef7f9da4265bf5e"
+}

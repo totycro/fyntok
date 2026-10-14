@@ -21,3 +21,27 @@ format:
 
 dev:
     uv run --locked python -m fyntok.cli serve --reload --log-level debug
+
+# Install the pinned local evaluator (requires Node >=22.22).
+experiment-install:
+    npm --prefix experiments/categorization ci --no-audit --no-fund
+
+# Export a private sample; review every expected_category and enter reviewed=yes.
+experiment-export *args:
+    uv run --locked python -m fyntok.experimentation export {{args}}
+
+experiment-prepare reviewer *args:
+    uv run --locked python -m fyntok.experimentation prepare --reviewer {{quote(reviewer)}} {{args}}
+
+experiment-run *args:
+    uv run --locked python -m fyntok.experimentation run {{args}}
+
+# Scripted synthetic responses, no authentication or inference.
+experiment-smoke:
+    uv run --locked python -m fyntok.experimentation run --offline --dataset experiments/categorization/smoke-fixture.json
+
+experiment-report directory:
+    uv run --locked python -m fyntok.experimentation report {{quote(directory)}}
+
+experiment-view:
+    PROMPTFOO_CONFIG_DIR="$PWD/data/experiments/promptfoo" PROMPTFOO_DISABLE_TELEMETRY=1 node --require ./experiments/categorization/loopback.cjs experiments/categorization/node_modules/.bin/promptfoo view --no

@@ -99,6 +99,11 @@ Session, access, and subscription-limit failures stop the run with retained batc
 
 The reliability implementation is tested, but human-reviewed live model accuracy remains an open milestone 4 acceptance criterion. See [the evaluation record](evaluations/REPORT.md) for the candidate synthetic sample and reproducible paired evaluation command.
 
+For tracked comparisons of category references, transaction references, and duplicate grouping,
+use the [local Promptfoo workflow](experiments/categorization/README.md#tracked-experiments-with-promptfoo).
+It exports a private sample for spreadsheet review and tracks a two-model, three-repetition pilot
+with accuracy, consistency, tokens, latency, and retained per-row results.
+
 Read the feature stories in `tests/acceptance/test_ai_stories.py`, or run `uv run --locked pytest tests/acceptance -v`. They use a scripted advisor to test the user's workflow deterministically, including an initially wrong supermarket suggestion that a correction changes. Additional tests exercise the Responses transport, credential lifecycle, durable batches, validation, and NiceGUI controls. Tests never sign in or send private transaction data to OpenAI. Live sign-in/inference and visual browser inspection were not repeated for milestone 3; the retained experiment remains the live integration evidence.
 
 

@@ -6,3 +6,4 @@ __pycache__/
 *.sqlite3-wal
 *.sqlite3-shm
 *.ai.lock
+node_modules/
