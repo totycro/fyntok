@@ -27,7 +27,7 @@ from fyntok.experimentation import (
 
 @pytest.fixture
 def sample() -> dict[str, Any]:
-    dataset = {
+    dataset: dict[str, Any] = {
         "version": 1,
         "reviewer": "Synthetic test expectations, not live accuracy evidence",
         "categories": [
@@ -41,6 +41,14 @@ def sample() -> dict[str, Any]:
         ],
         "examples": [{"example_id": "example-1", "description": "Bakery", "category_id": "c-food"}],
     }
+    dataset["cases"] = [
+        {
+            **case,
+            "amount_cents": -1000 if index == 0 else 2000,
+            "booking_date": "2026-01-15",
+        }
+        for index, case in enumerate(dataset["cases"])
+    ]
     dataset["hash"] = content_hash(dataset)
     return dataset
 
@@ -62,15 +70,26 @@ class CapturingClient:
         return OfflineClient().request(model, payload, schema, instructions, operation=operation)
 
 
-def test_factor_matrix_preserves_context_and_expands_conflicting_duplicates(
+def test_date_variants_keep_duplicates_separate_and_isolate_booking_date(
     sample: dict[str, Any],
 ) -> None:
     baseline_examples = None
+    payloads = []
+    assert len(variants()) == 2
+    assert {v["model"] for v in variants()} == {"gpt-6.1-sol"}
     for config in variants(("mock",)):
         client = CapturingClient()
         result = evaluate(client, sample, config)
         payload = client.payloads[0]
-        assert len(payload["transactions"]) == (2 if config["grouped"] else 3)
+        payloads.append(payload)
+        assert len(payload["transactions"]) == 3
+        assert not config["grouped"]
+        for target, case in zip(payload["transactions"], sample["cases"], strict=True):
+            assert target["amount_cents"] == case["amount_cents"]
+            assert ("booking_date" in target) == config["booking_date"]
+            if config["booking_date"]:
+                assert target["booking_date"] == case["booking_date"]
+            assert "currency" not in target
         assert len(result["rows"]) == 3
         assert result["metrics"]["accuracy"] == pytest.approx(2 / 3)
         assert result["metrics"]["description_accuracy"] == 0.75
@@ -88,6 +107,10 @@ def test_factor_matrix_preserves_context_and_expands_conflicting_duplicates(
         if baseline_examples is None:
             baseline_examples = example_ids
         assert example_ids == baseline_examples
+    dated = json.loads(json.dumps(payloads[1]))
+    for target in dated["transactions"]:
+        del target["booking_date"]
+    assert dated == payloads[0]
 
 
 @pytest.mark.parametrize("failure", ["missing", "duplicate", "unknown", "transport"])
@@ -122,17 +145,39 @@ def test_failed_batches_count_against_accuracy(sample: dict[str, Any], failure: 
     assert result["metrics"]["invalid_output_rate"] == (0 if failure == "transport" else 1)
 
 
-def test_review_roundtrip_does_not_modify_database(tmp_path: Path) -> None:
+@pytest.mark.parametrize("invalid", ["missing", "float", "boolean", "date"])
+def test_context_is_validated_before_inference(sample: dict[str, Any], invalid: str) -> None:
+    match invalid:
+        case "missing":
+            del sample["cases"][0]["amount_cents"]
+        case "float":
+            sample["cases"][0]["amount_cents"] = 1.5
+        case "boolean":
+            sample["cases"][0]["amount_cents"] = True
+        case "date":
+            sample["cases"][0]["booking_date"] = "20260115"
+    client = CapturingClient()
+    with pytest.raises(ValueError):
+        evaluate(client, sample, variants(("mock",))[0])
+    assert not client.payloads
+
+
+def test_review_roundtrip_does_not_modify_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     database = tmp_path / "private.sqlite3"
     with sqlite3.connect(database) as connection:
         connection.executescript(
             "CREATE TABLE categories (id, name, definition, kind, archived);"
-            "CREATE TABLE transactions (id, description, account);"
+            "CREATE TABLE transactions (id, description, account, "
+            "amount_cents INTEGER DEFAULT -1250, booking_date TEXT DEFAULT '2026-01-15');"
             "CREATE TABLE assignments (transaction_id, category_id, active, source, protected);"
             "CREATE TABLE confirmed_examples (transaction_id, category_id, confirmed_at);"
             "INSERT INTO categories VALUES ('food', 'Food', 'Food purchases', 'spending', 0);"
-            "INSERT INTO transactions VALUES ('one', 'Market', 'private-account');"
-            "INSERT INTO transactions VALUES ('two', 'Market', 'private-account');"
+            "INSERT INTO transactions (id, description, account) "
+            "VALUES ('one', 'Market', 'private-account');"
+            "INSERT INTO transactions (id, description, account) "
+            "VALUES ('two', 'Market', 'private-account');"
             "INSERT INTO assignments VALUES ('one', 'food', 1, 'ai', 0);"
             "INSERT INTO confirmed_examples VALUES ('one', 'food', '2026-01-01');"
         )
@@ -141,6 +186,14 @@ def test_review_roundtrip_does_not_modify_database(tmp_path: Path) -> None:
     export_review(database, review)
     assert database.read_bytes() == original
     assert "private-account" not in review.read_text()
+    snapshot = json.loads(review.with_suffix(".snapshot.json").read_text())
+    assert snapshot["cases"][0]["amount_cents"] == -1250
+    assert snapshot["cases"][0]["booking_date"] == "2026-01-15"
+
+    def deny_database(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Preparing the dataset must not access SQLite.")
+
+    monkeypatch.setattr(sqlite3, "connect", deny_database)
     frozen = tmp_path / "dataset.json"
     with pytest.raises(ValueError, match="reviewed=yes"):
         prepare_review(review, frozen, "Reviewer")
@@ -149,6 +202,10 @@ def test_review_roundtrip_does_not_modify_database(tmp_path: Path) -> None:
     for row in rows:
         row["reviewed"] = "yes"
         row["expected_category"] = "Food"
+        assert row["amount_cents"] == "-1250"
+        assert row["booking_date"] == "2026-01-15"
+        row["amount_cents"] = "250000"
+        row["booking_date"] = "2026-02-28"
     with review.open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
@@ -157,9 +214,58 @@ def test_review_roundtrip_does_not_modify_database(tmp_path: Path) -> None:
     dataset = load_dataset(frozen)
     assert dataset["examples"] == []
     assert len(dataset["cases"]) == 1
+    assert dataset["cases"][0]["amount_cents"] == 250000
+    assert dataset["cases"][0]["booking_date"] == "2026-02-28"
     assert database.read_bytes() == original
     with pytest.raises(FileExistsError):
         prepare_review(review, frozen, "Reviewer")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("amount_cents", "12.50"), ("amount_cents", ""), ("booking_date", "2026-02-30")],
+)
+def test_prepare_rejects_invalid_review_context(tmp_path: Path, field: str, value: str) -> None:
+    review = tmp_path / "review.csv"
+    row = {
+        "id": "one",
+        "description": "Market",
+        "amount_cents": "-1250",
+        "booking_date": "2026-01-15",
+        "expected_category": "Food",
+        "reviewed": "yes",
+        "notes": "",
+        field: value,
+    }
+    write_json(
+        review.with_suffix(".snapshot.json"),
+        {"categories": [{"id": "food", "name": "Food"}], "cases": [row]},
+    )
+    with review.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(row))
+        writer.writeheader()
+        writer.writerow(row)
+    output = tmp_path / "dataset.json"
+    with pytest.raises(ValueError):
+        prepare_review(review, output, "Reviewer")
+    assert not output.exists()
+
+
+def test_runner_rejects_missing_context_without_database_lookup(
+    tmp_path: Path, sample: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def deny_database(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Runner must not look up missing context in SQLite.")
+
+    monkeypatch.setattr(sqlite3, "connect", deny_database)
+    del sample["cases"][0]["amount_cents"]
+    sample["hash"] = content_hash({k: v for k, v in sample.items() if k != "hash"})
+    path = tmp_path / "dataset.json"
+    write_json(path, sample)
+    output = tmp_path / "run"
+    with pytest.raises(ValueError, match="amount_cents"):
+        run_pilot(path, output)
+    assert not output.exists()
 
 
 @pytest.fixture
@@ -168,7 +274,8 @@ def export_database(tmp_path: Path) -> Path:
     with sqlite3.connect(database) as connection:
         connection.executescript(
             "CREATE TABLE categories (id, name, definition, kind, archived);"
-            "CREATE TABLE transactions (id, description, account);"
+            "CREATE TABLE transactions (id, description, account, "
+            "amount_cents INTEGER DEFAULT -1250, booking_date TEXT DEFAULT '2026-01-15');"
             "CREATE TABLE assignments (transaction_id, category_id, active, source, protected);"
             "CREATE TABLE confirmed_examples (transaction_id, category_id, confirmed_at);"
         )
@@ -178,7 +285,7 @@ def export_database(tmp_path: Path) -> Path:
             + [("Archived", "Archived", 1)],
         )
         connection.executemany(
-            "INSERT INTO transactions VALUES (?, ?, '')",
+            "INSERT INTO transactions (id, description, account) VALUES (?, ?, '')",
             [(name, "Shared merchant") for name in ("Food", "Shopping", "Travel", "Health")]
             + [("unassigned", "Unassigned merchant"), ("archived", "Archived merchant")],
         )
@@ -255,7 +362,7 @@ def test_export_includes_all_current_manual_choices_beyond_sample_limits(
     with sqlite3.connect(export_database) as connection:
         connection.execute("UPDATE transactions SET description=id")
         connection.executemany(
-            "INSERT INTO transactions VALUES (?, ?, '')",
+            "INSERT INTO transactions (id, description, account) VALUES (?, ?, '')",
             [
                 (tid, "Manual merchant" if repeated else f"Manual merchant {tid}")
                 for tid in sorted(manual_ids)
@@ -307,7 +414,7 @@ def test_export_reassigns_shared_description_to_preserve_category_coverage(
 ) -> None:
     with sqlite3.connect(export_database) as connection:
         connection.executemany(
-            "INSERT INTO transactions VALUES (?, ?, '')",
+            "INSERT INTO transactions (id, description, account) VALUES (?, ?, '')",
             [(f"other-{name}", f"Unique {name}") for name in ("Food", "Health", "Shopping")],
         )
         connection.executemany(
@@ -340,8 +447,12 @@ def test_dataset_rejects_edits_and_held_out_leakage(tmp_path: Path, sample: dict
 
 
 def test_offline_provider_keeps_artifacts_without_fake_token_counts(
-    tmp_path: Path, sample: dict[str, Any]
+    tmp_path: Path, sample: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    def deny_database(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Running the provider must use the frozen dataset, not SQLite.")
+
+    monkeypatch.setattr(sqlite3, "connect", deny_database)
     path = tmp_path / "dataset.json"
     write_json(path, sample)
     output = tmp_path / "run"
@@ -352,7 +463,7 @@ def test_offline_provider_keeps_artifacts_without_fake_token_counts(
                 "dataset": str(path),
                 "output": str(output),
                 "offline": True,
-                "variant": variants(("mock",))[7],
+                "variant": variants(("mock",))[1],
             }
         },
         {},
@@ -400,7 +511,13 @@ def test_provider_aggregates_real_transport_usage(
     )
     monkeypatch.setattr(experimentation, "ChatGPTSession", Login)
     sample["cases"] = [
-        {"id": f"row-{i}", "description": "Market", "expected_category_id": "c-food"}
+        {
+            "id": f"row-{i}",
+            "description": "Market",
+            "expected_category_id": "c-food",
+            "amount_cents": -100,
+            "booking_date": "2026-01-15",
+        }
         for i in range(26)
     ]
     sample["hash"] = content_hash({k: v for k, v in sample.items() if k != "hash"})
@@ -430,16 +547,16 @@ def test_report_pairs_changes_and_repetition_stability(
     baseline = evaluate(OfflineClient(), sample, variants(("mock",))[0])
     baseline.update(tokenUsage=None, offline=True)
     changed = json.loads(json.dumps(baseline))
-    changed["config"] = variants(("mock",))[7]
+    changed["config"] = variants(("mock",))[1]
     changed["rows"][1]["prediction"]["category_id"] = "c-shop"
-    write_json(tmp_path / "mock-names0-short0-group0-r1/result.json", baseline)
-    write_json(tmp_path / "mock-names1-short1-group1-r1/result.json", changed)
+    write_json(tmp_path / "mock-amount1-date0-r1/result.json", baseline)
+    write_json(tmp_path / "mock-amount1-date1-r1/result.json", changed)
     changed["rows"][1]["prediction"]["category_id"] = "c-food"
-    write_json(tmp_path / "mock-names1-short1-group1-r2/result.json", changed)
+    write_json(tmp_path / "mock-amount1-date1-r2/result.json", changed)
     generate_report(tmp_path)
     generate_report(tmp_path)  # Regeneration preserves source artifacts.
     report = json.loads((tmp_path / "comparison.json").read_text())
     assert report["runs"][1]["improved"] == 1
     assert report["runs"][2]["improved"] is None  # Baseline repetition 2 is absent.
-    assert report["stability"]["mock-names1-short1-group1"] == pytest.approx(2 / 3)
+    assert report["stability"]["mock-amount1-date1"] == pytest.approx(2 / 3)
     assert "not model accuracy evidence" in (tmp_path / "comparison.md").read_text()

@@ -43,5 +43,9 @@ experiment-smoke:
 experiment-report directory:
     uv run --locked python -m fyntok.experimentation report {{quote(directory)}}
 
+# Import saved predictions as transaction rows; no model calls.
+experiment-view-report directory *args:
+    uv run --locked python -m fyntok.experimentation view-report {{quote(directory)}} {{args}}
+
 experiment-view:
     PROMPTFOO_CONFIG_DIR="$PWD/data/experiments/promptfoo" PROMPTFOO_DISABLE_TELEMETRY=1 node --require ./experiments/categorization/viewer-bind.cjs experiments/categorization/node_modules/.bin/promptfoo view --no

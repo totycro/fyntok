@@ -20,19 +20,25 @@
     {
       "id": "20000000-0000-4000-8000-000000000001",
       "description": "Example Market",
-      "expected_category_id": "10000000-0000-4000-8000-000000000001"
+      "expected_category_id": "10000000-0000-4000-8000-000000000001",
+      "amount_cents": -1000,
+      "booking_date": "2026-01-15"
     },
     {
       "id": "20000000-0000-4000-8000-000000000002",
       "description": "Example Market",
-      "expected_category_id": "10000000-0000-4000-8000-000000000002"
+      "expected_category_id": "10000000-0000-4000-8000-000000000002",
+      "amount_cents": 2000,
+      "booking_date": "2026-01-15"
     },
     {
       "id": "20000000-0000-4000-8000-000000000003",
       "description": "Example Bakery",
-      "expected_category_id": "10000000-0000-4000-8000-000000000001"
+      "expected_category_id": "10000000-0000-4000-8000-000000000001",
+      "amount_cents": 2000,
+      "booking_date": "2026-01-15"
     }
   ],
   "examples": [],
-  "hash": "3c4fc1bec60b9addccc5f83973e232bcd65604742c639894bef7f9da4265bf5e"
+  "hash": "d230f7793e9276a4d910cbdc0b456730cd38f572f83ecae827e678f2989a8586"
 }
