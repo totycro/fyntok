@@ -156,7 +156,7 @@ def test_review_roundtrip_does_not_modify_database(tmp_path: Path) -> None:
     prepare_review(review, frozen, "Reviewer")
     dataset = load_dataset(frozen)
     assert dataset["examples"] == []
-    assert len(dataset["cases"]) == 2
+    assert len(dataset["cases"]) == 1
     assert database.read_bytes() == original
     with pytest.raises(FileExistsError):
         prepare_review(review, frozen, "Reviewer")
@@ -191,7 +191,7 @@ def export_database(tmp_path: Path) -> Path:
     return database
 
 
-def test_export_covers_all_assigned_categories_including_conflicts(
+def test_export_deduplicates_conflicts_and_reports_unrepresented_categories(
     export_database: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     original = export_database.read_bytes()
@@ -199,11 +199,15 @@ def test_export_covers_all_assigned_categories_including_conflicts(
     export_review(export_database, review, limit=1)
     snapshot = json.loads(review.with_suffix(".snapshot.json").read_text())
     rows = snapshot["cases"]
-    assert {r["candidate_category"] for r in rows} == {"Food", "Shopping", "Travel", "Health"}
-    assert len(rows) == 4
+    assert {r["candidate_category"] for r in rows} == {"Food"}
+    assert len(rows) == 1
     assert len({r["description"] for r in rows}) == 1
     assert snapshot["examples"] == []
-    assert "Categories without assigned transactions: Empty" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Categories without assigned transactions: Empty" in output
+    assert "Categories without a distinct description representative: Health, Shopping, Travel" in (
+        output
+    )
     assert export_database.read_bytes() == original
     repeated = tmp_path / "repeated.csv"
     export_review(export_database, repeated, limit=1)
@@ -217,10 +221,10 @@ def test_export_fills_remaining_limit_without_duplicate_rows(
     export_review(export_database, review, limit=3)
     snapshot = json.loads(review.with_suffix(".snapshot.json").read_text())
     rows = snapshot["cases"]
-    assert len(rows) == 6
-    assert len({r["id"] for r in rows}) == 6
+    assert len(rows) == 3
+    assert len({r["id"] for r in rows}) == 3
     assert len({r["description"] for r in rows}) == 3
-    assert {r["candidate_category"] for r in rows} == {"Food", "Shopping", "Travel", "Health", ""}
+    assert {r["candidate_category"] for r in rows} == {"Food", ""}
 
 
 def test_export_rejects_limit_that_cannot_cover_categories(
@@ -249,6 +253,7 @@ def test_export_includes_all_current_manual_choices_beyond_sample_limits(
 ) -> None:
     manual_ids = {f"manual-{index:02}" for index in range(55)}
     with sqlite3.connect(export_database) as connection:
+        connection.execute("UPDATE transactions SET description=id")
         connection.executemany(
             "INSERT INTO transactions VALUES (?, ?, '')",
             [
@@ -274,19 +279,51 @@ def test_export_includes_all_current_manual_choices_beyond_sample_limits(
         )
     original = export_database.read_bytes()
     review = tmp_path / "review.csv"
-    export_review(export_database, review, limit=1)
+    export_review(export_database, review, limit=4)
     snapshot = json.loads(review.with_suffix(".snapshot.json").read_text())
     rows = snapshot["cases"]
     exported_ids = {r["id"] for r in rows}
-    assert manual_ids <= exported_ids
+    if repeated:
+        assert len(manual_ids & exported_ids) == 1
+    else:
+        assert manual_ids <= exported_ids
     assert "unassigned" not in exported_ids
     assert len(rows) == len(exported_ids)
-    assert {r["candidate_category"] for r in rows} == {"Food", "Shopping", "Travel", "Health"}
-    assert len({r["description"] for r in rows}) == (2 if repeated else 56)
+    assert {r["candidate_category"] for r in rows} == {"Food", "Health", "Shopping", "Travel"}
+    manual_descriptions = {
+        "Manual merchant" if repeated else f"Manual merchant {tid}" for tid in manual_ids
+    }
+    assert manual_descriptions <= {r["description"] for r in rows}
+    assert len(rows) == len({r["description"] for r in rows})
     with review.open(newline="") as stream:
         assert {r["id"] for r in csv.DictReader(stream)} == exported_ids
-    assert snapshot["examples"] == []
+    assert not manual_ids & {e["example_id"] for e in snapshot["examples"]}
+    assert not {e["description"] for e in snapshot["examples"]} & {r["description"] for r in rows}
     assert export_database.read_bytes() == original
+
+
+def test_export_reassigns_shared_description_to_preserve_category_coverage(
+    export_database: Path, tmp_path: Path
+) -> None:
+    with sqlite3.connect(export_database) as connection:
+        connection.executemany(
+            "INSERT INTO transactions VALUES (?, ?, '')",
+            [(f"other-{name}", f"Unique {name}") for name in ("Food", "Health", "Shopping")],
+        )
+        connection.executemany(
+            "INSERT INTO assignments VALUES (?, ?, 1, 'ai', 0)",
+            [(f"other-{name}", name) for name in ("Food", "Health", "Shopping")],
+        )
+        # The shared merchant must represent Travel; its manual choice wins over AI Food.
+        connection.execute("UPDATE assignments SET source='manual' WHERE transaction_id='Travel'")
+    review = tmp_path / "review.csv"
+    export_review(export_database, review, limit=4)
+    snapshot = json.loads(review.with_suffix(".snapshot.json").read_text())
+    rows = snapshot["cases"]
+    assert len(rows) == len({r["description"] for r in rows}) == 4
+    assert {r["candidate_category"] for r in rows} == {"Food", "Health", "Shopping", "Travel"}
+    assert next(r for r in rows if r["description"] == "Shared merchant")["id"] == "Travel"
+    assert snapshot["examples"] == []
 
 
 def test_dataset_rejects_edits_and_held_out_leakage(tmp_path: Path, sample: dict[str, Any]) -> None:

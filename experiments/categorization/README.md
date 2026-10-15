@@ -38,12 +38,15 @@ descriptions, first ensuring at least one row from every non-archived category
 with an active transaction assignment, then sampling across category labels,
 repeats, and conflicts. Categories without assigned transactions are reported.
 If `--limit` is too small for category coverage, export fails before writing files.
-Each description contributes up to three rows, or more when needed to retain
-every conflicting category label. Export additionally includes every transaction
-with a current manual or protected assignment, including manual choices retained
-by undo or category merges. These mandatory rows can exceed both `--limit` and
-the three-row allowance; superseded choices remain in history rather than becoming
-review targets. All exported transaction IDs are excluded from confirmed examples.
+Each cleaned description contributes exactly one row. Current manual or protected
+choices take precedence over AI assignments, including choices retained by undo or
+category merges. All distinct manually chosen descriptions are included even when
+this exceeds `--limit`. Repeated manual choices for the same description collapse
+to one representative. Category coverage uses different descriptions where possible;
+categories that cannot be represented without duplicating a description are reported.
+Representative ties use transaction ID order. Superseded choices remain in history.
+Confirmed examples with an exported description are excluded to prevent duplicate
+manual choices from leaking the expected label into inference.
 The sample is intentionally diagnostic,
 not a prevalence-weighted estimate of all spending. Every expected label needs
 review, including any candidate copied from an existing assignment. Use exact
@@ -51,10 +54,9 @@ saved category names; leave descriptions and row IDs unchanged. Notes stay local
 and never enter inference. A new export requires a new output path.
 
 Preparation freezes a hashed dataset. Confirmed examples exclude the selected
-transaction IDs. Similar descriptions in examples are retained intentionally to
+cleaned descriptions. Similar descriptions in examples are retained intentionally to
 measure prediction under the application's guidance; the same retrieved example
-set is used for all configurations. Identical descriptions can have different
-reviewed labels, and those conflicts remain in the benchmark.
+set is used for all configurations. The review export contains no identical descriptions.
 
 After review, sign in through the dashboard (`just dev`) if needed, then:
 
