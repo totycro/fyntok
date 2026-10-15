@@ -76,7 +76,9 @@ variants, with three repetitions each:
 
 Both use category names, short transaction references (`t1`, `t2`, ...), and
 individual rows, even when descriptions repeat. Positive amounts mean incoming;
-negative amounts mean outgoing. No currency field is sent. Category definitions,
+negative amounts mean outgoing. Positive amounts default to a suitable saved income
+category when no other purpose is known; evidence of transfers, refunds, or another
+specific purpose takes precedence. No currency field is sent. Category definitions,
 confirmed examples, instructions, batching, and model stay fixed; only the date
 field differs. Examples retain their existing description/category guidance and
 are identical between variants. Run labels end in `amount1-date0-r1` or

@@ -217,7 +217,7 @@ def test_completed_batches_survive_a_later_failure_and_reopening(
     engine = open_database(path)
     import_content(
         engine,
-        b"a;EXAMPLE GROCERY;01.01.2024;01.01.2024;-10,00;EUR\na;EXAMPLE CARE;02.01.2024;02.01.2024;-20,00;EUR\n",
+        b"a;EXAMPLE GROCERY;01.01.2024;01.01.2024;-10,00;EUR\na;EXAMPLE CARE;02.01.2024;02.01.2024;20,00;EUR\n",
         "bank.csv",
     )
 
@@ -227,6 +227,8 @@ def test_completed_batches_survive_a_later_failure_and_reopening(
         def classify(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
             del model
             self.calls += 1
+            target = payload["transactions"][0]
+            assert target["amount_cents"] == {"EXAMPLE GROCERY": -1000, "EXAMPLE CARE": 2000}[target["description"]]
             if self.calls == 2:
                 raise RuntimeError("Disconnected")
             return {

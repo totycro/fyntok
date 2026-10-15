@@ -472,7 +472,7 @@ def test_ai_ui_proposals_fixed_model_and_recalculation(
                 "Propose categories: preparing descriptions and requesting AI suggestions"
                 in caplog.text
             )
-            assert model == AI_MODEL == "gpt-6-luna"
+            assert model == AI_MODEL == "gpt-6.1-sol"
             return {
                 "categories": [
                     {"name": "Groceries", "definition": "Food at supermarkets", "kind": "spending"}
@@ -497,7 +497,7 @@ def test_ai_ui_proposals_fixed_model_and_recalculation(
         async with user_simulation(lambda: build_page(engine, Advisor(), auth)) as user:
             await user.open("/")
             assert user.client is not None
-            await user.should_see("AI model: gpt-6-luna")
+            await user.should_see("AI model: gpt-6.1-sol")
             await user.should_not_see(kind=ui.button, content="Load models")
             await user.should_not_see(kind=ui.select, content="AI model")
             user.find("Propose categories").click()
@@ -662,7 +662,7 @@ def test_ui_unavailable_model_has_no_fallback(tmp_path: Path, action: str) -> No
             await user.open("/")
             user.find(action).click()
             await user.should_see("Check the configured model.")
-            assert calls == ["gpt-6-luna"]
+            assert calls == ["gpt-6.1-sol"]
             assert transaction_rows(engine)[0]["source"] == "unassigned"
             await user.should_see("Create category")
 

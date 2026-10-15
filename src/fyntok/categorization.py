@@ -322,6 +322,7 @@ def _execute_run(
                     targets.append(
                         {
                             "transaction_id": t.id,
+                            "amount_cents": t.amount_cents,
                             "description": parse_description(
                                 t.description, t.account
                             ).cleaned_description,
