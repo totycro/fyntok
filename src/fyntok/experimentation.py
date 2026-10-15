@@ -196,13 +196,20 @@ def export_review(database: Path, output: Path, *, limit: int = 50, seed: int = 
                 "booking_date",
                 "candidate_category",
                 "expected_category",
+                "role",
                 "reviewed",
                 "notes",
             ],
         )
         writer.writeheader()
         writer.writerows(
-            {**row, "expected_category": row["candidate_category"], "reviewed": "", "notes": ""}
+            {
+                **row,
+                "expected_category": row["candidate_category"],
+                "role": "test",
+                "reviewed": "",
+                "notes": "",
+            }
             for row in selected
         )
     print(f"Exported {len(selected)} rows / {len(chosen)} descriptions to {output}")
@@ -223,19 +230,35 @@ def prepare_review(review: Path, output: Path, reviewer: str) -> None:
     with review.open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
     originals = {c["id"]: c for c in snapshot["cases"]}
-    if len(rows) != len(originals) or {r["id"] for r in rows} != set(originals):
-        raise ValueError("Review must retain every exported row exactly once.")
-    reviewed = {}
+    normalized = []
     for row in rows:
-        if row["description"] != originals[row["id"]]["description"]:
-            raise ValueError("Descriptions changed; export a new sample instead.")
         if row["reviewed"].strip().casefold() != "yes" or row["expected_category"] not in names:
             raise ValueError("Every row needs reviewed=yes and an exact saved category name.")
-        reviewed[row["id"]] = row
+        role = row.get("role", "").strip().casefold() or "test"
+        if role not in {"test", "example"}:
+            raise ValueError("Every review role must be test or example.")
+        if not row["description"].strip():
+            raise ValueError("Every row needs a nonempty description.")
+        normalized.append({**row, "role": role})
+    reviewed = {}
+    retained = set()
+    for tid in originals:
+        matches = [i for i, row in enumerate(normalized) if row["id"] == tid]
+        tests = [i for i in matches if normalized[i]["role"] == "test"]
+        if not matches:
+            raise ValueError("Review must retain every exported row ID.")
+        if len(tests) > 1:
+            raise ValueError("Review must retain every exported test row exactly once.")
+        selected = tests[0] if tests else matches[0]
+        retained.add(selected)
+        reviewed[tid] = normalized[selected]
+    additional = [row for i, row in enumerate(normalized) if i not in retained]
+    if any(row["role"] != "example" for row in additional):
+        raise ValueError("Additional review rows must have role=example.")
     cases = [
         {
             "id": c["id"],
-            "description": c["description"],
+            "description": reviewed[c["id"]]["description"],
             "amount_cents": int(reviewed[c["id"]].get("amount_cents", "")),
             "booking_date": reviewed[c["id"]].get("booking_date", ""),
             "expected_category_id": names[reviewed[c["id"]]["expected_category"]],
@@ -243,11 +266,51 @@ def prepare_review(review: Path, output: Path, reviewer: str) -> None:
         }
         for c in snapshot["cases"]
     ]
-    dataset = {**snapshot, "cases": cases, "reviewer": reviewer.strip()}
-    validate_transaction_context(dataset)
-    dataset["hash"] = content_hash(dataset)
+    validate_transaction_context({"cases": cases})
+    example_cases = [c for c in cases if reviewed[c["id"]]["role"] == "example"]
+    test_cases = [c for c in cases if reviewed[c["id"]]["role"] == "test"]
+    example_cases.extend(
+        {
+            "id": "review-example:"
+            + content_hash(
+                {
+                    "source_id": row["id"],
+                    "description": row["description"],
+                    "category_id": names[row["expected_category"]],
+                }
+            ),
+            "description": row["description"],
+            "expected_category_id": names[row["expected_category"]],
+        }
+        for row in additional
+    )
+    if not test_cases:
+        raise ValueError("Keep at least one test row in the review.")
+    example_ids = [c["id"] for c in example_cases]
+    examples = [e for e in snapshot.get("examples", []) if e["example_id"] not in example_ids]
+    examples.extend(
+        {
+            "example_id": c["id"],
+            "description": c["description"],
+            "category_id": c["expected_category_id"],
+        }
+        for c in example_cases
+    )
+    dataset = {
+        **snapshot,
+        "cases": test_cases,
+        "examples": examples,
+        "review_example_ids": example_ids,
+        "reviewer": reviewer.strip(),
+    }
+    validate_examples(dataset)
+    dataset["hash"] = content_hash({k: v for k, v in dataset.items() if k != "hash"})
     write_json(output, dataset)
     print(f"Frozen reviewed dataset: {output}")
+    print(
+        f"{len(test_cases)} test rows, {len(example_ids)} review examples, "
+        f"{len(examples) - len(example_ids)} existing examples"
+    )
 
 
 def load_dataset(path: Path) -> dict[str, Any]:
@@ -263,9 +326,28 @@ def load_dataset(path: Path) -> dict[str, Any]:
         raise ValueError("Duplicate row IDs or category names.")
     if any(c["expected_category_id"] not in allowed for c in cases):
         raise ValueError("Unknown expected category.")
-    if any(e["example_id"] in ids or e["category_id"] not in allowed for e in dataset["examples"]):
-        raise ValueError("Examples must use saved categories and exclude held-out rows.")
+    validate_examples(dataset)
     return dataset
+
+
+def validate_examples(dataset: dict[str, Any]) -> None:
+    """Keep explicit teaching examples separate from scored transactions."""
+    examples = dataset["examples"]
+    test_ids = {c["id"] for c in dataset["cases"]}
+    allowed = {c["id"] for c in dataset["categories"]}
+    example_ids = {e["example_id"] for e in examples}
+    if len(example_ids) != len(examples):
+        raise ValueError("Duplicate example IDs.")
+    if any(e["example_id"] in test_ids or e["category_id"] not in allowed for e in examples):
+        raise ValueError("Examples must use saved categories and exclude held-out rows.")
+    explicit = dataset.get("review_example_ids", [])
+    if (
+        not isinstance(explicit, list)
+        or any(not isinstance(eid, str) for eid in explicit)
+        or len(set(explicit)) != len(explicit)
+        or not set(explicit) <= example_ids
+    ):
+        raise ValueError("Review example IDs must be unique and refer to existing examples.")
 
 
 def targets_for(dataset: dict[str, Any], grouped: bool) -> list[list[dict[str, Any]]]:
@@ -293,12 +375,16 @@ def batches_for(dataset: dict[str, Any], grouped: bool, size: int = 25) -> list[
 
 def evaluate(client: Requester, dataset: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     validate_transaction_context(dataset)
+    validate_examples(dataset)
     categories = dataset["categories"]
     references = {c["id"]: c["name"] if config["category_names"] else c["id"] for c in categories}
     reverse = {reference: cid for cid, reference in references.items()}
     wire_categories = [{**c, "id": references[c["id"]]} for c in categories]
     # Retrieval sees the entire fixed original selection, independent of batching/grouping.
-    examples = relevant_examples(dataset["examples"], dataset["cases"])
+    explicit_ids = set(dataset.get("review_example_ids", []))
+    explicit = [e for e in dataset["examples"] if e["example_id"] in explicit_ids]
+    existing = [e for e in dataset["examples"] if e["example_id"] not in explicit_ids]
+    examples = explicit + relevant_examples(existing, dataset["cases"])
     wire_examples = [{**e, "category_id": references[e["category_id"]]} for e in examples]
     predictions: dict[str, dict[str, Any]] = {}
     errors = []

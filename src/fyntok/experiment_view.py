@@ -24,6 +24,31 @@ def completed_at(path: Path) -> float:
     return path.stat().st_mtime
 
 
+def saved_prompt(runs: list[dict[str, Any]]) -> str:
+    """Show original request bodies rather than reconstructing historical inputs."""
+    requests = [
+        {
+            "run": run["name"],
+            "requests": [
+                json.loads(path.read_text())
+                for path in sorted(run["path"].parent.glob("traces/*/request.json"))
+            ],
+        }
+        for run in runs
+    ]
+    return json.dumps(
+        {
+            "note": (
+                "Original saved request bodies for every repetition and batch in this column. "
+                "An empty requests list means no request traces were retained for that run."
+            ),
+            "runs": requests,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
 def comparison_export(directory: Path, *, latest: int | None = None) -> dict[str, Any]:
     """Export one column per variant, averaging all its saved repetitions."""
     dataset = json.loads((directory / "dataset.json").read_text())
@@ -62,7 +87,7 @@ def comparison_export(directory: Path, *, latest: int | None = None) -> dict[str
         label = aggregate["label"]
         prompt_id = aggregate["id"]
         provider = {"id": f"saved:{prompt_id}", "label": label}
-        prompt = {"raw": label, "label": label}
+        prompt = {"raw": saved_prompt(runs), "label": label}
         correct_count = 0
         totals: dict[str, float] = {"accuracy": 0, "coverage": 0}
         if count > 1:

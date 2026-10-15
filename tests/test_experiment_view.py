@@ -83,6 +83,30 @@ def test_current_comparison_uses_model_only_label(saved_pilot: Path) -> None:
     assert {r["provider"]["label"] for r in exported["results"]["results"]} == {"mock"}
 
 
+def test_comparison_prompt_contains_original_requests(saved_pilot: Path) -> None:
+    run = saved_pilot / "mock-amount1-date0-r1"
+    bodies = [
+        {
+            "model": "mock",
+            "instructions": "Historical instructions, unchanged by current code.",
+            "input": [{"role": "user", "content": f"Original batch {batch}: Café"}],
+            "text": {"format": {"type": "json_schema", "schema": {"type": "object"}}},
+        }
+        for batch in range(2)
+    ]
+    for batch, body in enumerate(bodies):
+        write_json(run / f"traces/batch-{batch}/request.json", body)
+    exported = comparison_export(saved_pilot)
+    prompt = exported["results"]["prompts"][0]
+    assert json.loads(prompt["raw"])["runs"] == [{"run": run.name, "requests": bodies}]
+    assert all(
+        cell["prompt"]["raw"] == prompt["raw"] for cell in exported["results"]["results"][:2]
+    )
+    missing = json.loads(exported["results"]["prompts"][1]["raw"])
+    assert missing["runs"][0]["requests"] == []
+    assert "no request traces were retained" in missing["note"]
+
+
 @pytest.mark.parametrize("mismatch", ["hash", "row_id", "expected", "duplicate", "offline"])
 def test_comparison_rejects_incompatible_evidence(saved_pilot: Path, mismatch: str) -> None:
     path = saved_pilot / "mock-amount1-date1-r1/result.json"

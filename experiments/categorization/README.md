@@ -66,13 +66,59 @@ The sample is intentionally diagnostic,
 not a prevalence-weighted estimate of all spending. Every expected label needs
 review, including any candidate copied from an existing assignment. Check the
 exported signed amounts and booking dates too. Use exact
-saved category names; leave descriptions and row IDs unchanged. Notes stay local
+saved category names; retain the original row IDs. Reviewed description edits are
+frozen into the new dataset. Notes stay local
 and never enter inference. A new export requires a new output path.
 
-Preparation freezes a hashed dataset. Confirmed examples exclude the selected
-cleaned descriptions. Similar descriptions in examples are retained intentionally to
-measure prediction under the application's guidance; the same retrieved example
-set is used for all configurations. The review export contains no identical descriptions.
+### Supply teaching examples in the review
+
+The review CSV includes a `role` column. Leave it as `test` for rows to score, or
+change it to `example` to teach the model that description's category:
+
+| role | description | expected_category | reviewed |
+|---|---|---|---|
+| example | Example Insurance | Housing | yes |
+| test | Example Supermarket | Groceries | yes |
+
+Use your actual saved category names. Both roles require `reviewed=yes` and a
+reviewed `expected_category`. Missing or blank roles mean `test`, so older review
+files still work. Roles accept surrounding spaces and either letter case. Keep
+at least one test row. Retain each original row ID. Reviewed descriptions are used as entered.
+
+You can also append rows with `role=example`. These may copy a test merchant
+and its ID, or leave the ID blank; preparation assigns a separate, deterministic
+example ID. Enter the example description, saved category, and `reviewed=yes`.
+Amounts and dates are optional for appended examples because they are not sent.
+The original test row remains scored. Example descriptions are used exactly as
+written; remove any temporary suffixes you do not want the model to see.
+
+Preparation moves example rows into the dataset's `examples` list and records
+`review_example_ids`. They are supplied as description/category guidance in
+every batch and repetition, and never appear in the scored comparison. Amounts,
+dates, and review notes are not included in teaching examples. Every explicitly
+selected example is sent, plus up to 40 retrieved existing confirmed examples;
+selected examples cannot be dropped by retrieval. Choosing an example reduces
+the number of scored transactions, so compare variants using the same frozen split.
+Prepared example IDs must be unique and separate from test IDs. Example and test
+descriptions may match: this measures classification with known merchant guidance,
+rather than prediction on unseen merchants.
+
+Preparation prints the counts of test rows, selected review examples, and
+existing examples. When changing an already prepared review, use a new output
+path so earlier frozen datasets and experiment results remain reproducible:
+
+```bash
+just experiment-prepare 'Your review identifier' --output data/experiments/dataset-with-examples.json
+just experiment-run --dataset data/experiments/dataset-with-examples.json
+```
+
+Preparation freezes the test/example split and example selection into a hashed
+dataset. Existing datasets without `review_example_ids` retain their retrieval
+behavior. Automatically exported confirmed examples exclude exported cleaned
+descriptions; explicit review examples become available after those rows leave
+the test set. Similar descriptions in examples are retained intentionally to
+measure prediction under the application's guidance; the same example set is
+used for all configurations. The review export contains no identical descriptions.
 
 After review, sign in through the dashboard (`just dev`) if needed, then:
 
@@ -138,6 +184,10 @@ one variant per column. The comparison supports any number of variants defined
 in the Python matrix. Column labels show only the model name. Repeat counts and
 configuration details remain in saved metadata; historical configurations with
 the same model label receive a short identifier to keep their columns distinct.
+Opening a column's prompt shows the original saved request bodies, including
+instructions, input, and output schema, for every repetition and batch. Runs
+without retained request traces show an empty request list; historical prompts
+are never reconstructed from current code.
 
 Each cell shows fractional accuracy, such as **2/3 correct (66.7%)**, the expected
 category, and every repeat's prediction and explanation. The column's named
