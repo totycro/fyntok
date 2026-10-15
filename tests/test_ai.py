@@ -228,6 +228,8 @@ def test_completed_batches_survive_a_later_failure_and_reopening(
             del model
             self.calls += 1
             target = payload["transactions"][0]
+            assert "booking_date" not in target
+            assert "value_date" not in target
             assert target["amount_cents"] == {"EXAMPLE GROCERY": -1000, "EXAMPLE CARE": 2000}[target["description"]]
             if self.calls == 2:
                 raise RuntimeError("Disconnected")

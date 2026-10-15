@@ -70,25 +70,23 @@ class CapturingClient:
         return OfflineClient().request(model, payload, schema, instructions, operation=operation)
 
 
-def test_date_variants_keep_duplicates_separate_and_isolate_booking_date(
+def test_variants_keep_duplicates_separate_and_omit_booking_date(
     sample: dict[str, Any],
 ) -> None:
     baseline_examples = None
-    payloads = []
-    assert len(variants()) == 2
+    assert len(variants()) == 1
     assert {v["model"] for v in variants()} == {"gpt-6.1-sol"}
-    for config in variants(("mock",)):
+    # Even a stale caller requesting dates must not put them in the LLM query.
+    for config in [variants(("mock",))[0], {**variants(("mock",))[0], "booking_date": True}]:
         client = CapturingClient()
         result = evaluate(client, sample, config)
         payload = client.payloads[0]
-        payloads.append(payload)
         assert len(payload["transactions"]) == 3
         assert not config["grouped"]
         for target, case in zip(payload["transactions"], sample["cases"], strict=True):
             assert target["amount_cents"] == case["amount_cents"]
-            assert ("booking_date" in target) == config["booking_date"]
-            if config["booking_date"]:
-                assert target["booking_date"] == case["booking_date"]
+            assert "booking_date" not in target
+            assert "value_date" not in target
             assert "currency" not in target
         assert len(result["rows"]) == 3
         assert result["metrics"]["accuracy"] == pytest.approx(2 / 3)
@@ -107,10 +105,6 @@ def test_date_variants_keep_duplicates_separate_and_isolate_booking_date(
         if baseline_examples is None:
             baseline_examples = example_ids
         assert example_ids == baseline_examples
-    dated = json.loads(json.dumps(payloads[1]))
-    for target in dated["transactions"]:
-        del target["booking_date"]
-    assert dated == payloads[0]
 
 
 @pytest.mark.parametrize("failure", ["missing", "duplicate", "unknown", "transport"])
@@ -463,7 +457,7 @@ def test_offline_provider_keeps_artifacts_without_fake_token_counts(
                 "dataset": str(path),
                 "output": str(output),
                 "offline": True,
-                "variant": variants(("mock",))[1],
+                "variant": variants(("mock",))[0],
             }
         },
         {},
@@ -544,10 +538,11 @@ def test_provider_aggregates_real_transport_usage(
 def test_report_pairs_changes_and_repetition_stability(
     tmp_path: Path, sample: dict[str, Any]
 ) -> None:
+    write_json(tmp_path / "dataset.json", sample)
     baseline = evaluate(OfflineClient(), sample, variants(("mock",))[0])
     baseline.update(tokenUsage=None, offline=True)
     changed = json.loads(json.dumps(baseline))
-    changed["config"] = variants(("mock",))[1]
+    changed["config"] = {**variants(("mock",))[0], "booking_date": True}
     changed["rows"][1]["prediction"]["category_id"] = "c-shop"
     write_json(tmp_path / "mock-amount1-date0-r1/result.json", baseline)
     write_json(tmp_path / "mock-amount1-date1-r1/result.json", changed)

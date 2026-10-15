@@ -23,6 +23,21 @@ binds to `0.0.0.0` for remote access; saved history is under ignored
 `data/experiments/promptfoo/`.
 Sharing and telemetry are disabled by the supplied commands.
 
+## Clean slate and archive
+
+All previous local datasets, reviews, runs, Promptfoo history, and standalone
+results and reports were moved to
+[`data/experiment-archive/20261015T114616932291Z/`](../../data/experiment-archive/20261015T114616932291Z/).
+The archive preserves original relative paths; `inventory.json` records each
+file's original path, size, and SHA-256 checksum. It is excluded from Git by the
+repository's `data/` rule. The earlier `data/OLD/` archive remains intact.
+
+Active experiment storage and Promptfoo history start empty. Prepare a new
+reviewed dataset before live inference. Source code and reusable test fixtures
+remain available; archived runs are never imported automatically.
+
+## Prepare and run a benchmark
+
 Prepare a private benchmark:
 
 ```bash
@@ -68,24 +83,22 @@ just experiment-view
 just experiment-report data/experiments/pilot-<timestamp>
 ```
 
-The pilot checks account availability of `gpt-6.1-sol`, then compares exactly two
-variants, with three repetitions each:
+The pilot checks account availability of `gpt-6.1-sol`, then runs one
+configuration with three repetitions:
 
 - **Amount:** cleaned description and signed integer `amount_cents`.
-- **Amount + booking date:** the same fields plus `booking_date` (`YYYY-MM-DD`).
 
-Both use category names, short transaction references (`t1`, `t2`, ...), and
+Requests use category names, short transaction references (`t1`, `t2`, ...), and
 individual rows, even when descriptions repeat. Positive amounts mean incoming;
 negative amounts mean outgoing. Positive amounts default to a suitable saved income
 category when no other purpose is known; evidence of transfers, refunds, or another
-specific purpose takes precedence. No currency field is sent. Category definitions,
-confirmed examples, instructions, batching, and model stay fixed; only the date
-field differs. Examples retain their existing description/category guidance and
-are identical between variants. Run labels end in `amount1-date0-r1` or
-`amount1-date1-r1` (and repetitions 2/3). Earlier matrix results remain readable.
+specific purpose takes precedence. No currency or transaction date fields are
+sent. Examples retain their existing description/category guidance. Visible run
+and column labels show only the model name, such as `gpt-6.1-sol`; internal
+filenames remain unique for each repetition. Earlier matrix results remain readable.
 
-Each of the six evaluations covers the entire frozen sample, in batches of at
-most 25 transactions. With 40 reviewed rows, this is 12 inference requests.
+Each of the three evaluations covers the entire frozen sample, in batches of at
+most 25 transactions. With 40 reviewed rows, this is six inference requests.
 Requests run sequentially in recorded, seeded configuration order, with fresh
 responses rather than Promptfoo's response cache. Provider-side prompt caching
 can still occur; raw usage is retained to make it visible.
@@ -99,7 +112,7 @@ both fields in its frozen dataset and stops before inference if either is missin
 or invalid. Older datasets must be prepared again from a review CSV containing
 these fields. Existing run artifacts remain unchanged.
 
-The existing sample remains one row per description; a future sample with
+The archived sample remains one row per description; a future sample with
 repeated descriptions is needed to measure the value of context for duplicates.
 
 The command prints the planned request count before inference. Each evaluation
@@ -120,51 +133,65 @@ repetitions. Category breakdowns are in individual `result.json` artifacts.
 Unknown token usage is shown as unavailable; dollar costs are not invented.
 
 After a completed pilot, the viewer receives one **Categorization comparison**
-evaluation with the latest two completed runs: one transaction per row and one
-configuration/repetition per column. Selection happens before importing results,
-so the browser does not need to load or hide a large matrix.
-Column labels explain the settings, for example `6.1-sol | amount + date | repeat 1`.
+evaluation with **all variants and repetitions**: one transaction per row and
+one variant per column. The comparison supports any number of variants defined
+in the Python matrix. Column labels show only the model name. Repeat counts and
+configuration details remain in saved metadata; historical configurations with
+the same model label receive a short identifier to keep their columns distinct.
+
+Each cell shows fractional accuracy, such as **2/3 correct (66.7%)**, the expected
+category, and every repeat's prediction and explanation. The column's named
+**accuracy** metric averages these scores across transactions and repetitions;
+it equals the average run accuracy because every run covers the same sample.
+For 40 transactions and three repetitions, 108 correct predictions out of 120
+means 90% accuracy. **Pass** means every repetition for that transaction was
+correct; the binary pass rate is not the mean accuracy. Use the named accuracy
+metric to compare variants.
+
+**Coverage** is the fraction of repetitions with a prediction. Missing predictions
+count as incorrect and uncovered. **Consistency** measures whether every repeat
+picked the same category, even if wrong; any missing prediction prevents
+consistency. With one repetition, consistency is unavailable.
+`comparison.md` and `comparison.json` include per-variant repetition counts, mean
+accuracy and its range across runs, coverage, consistency, mean run duration,
+and mean token usage, alongside the individual run summaries. Incomplete pilots
+are labeled using the manifest; averages use available results and show actual
+repeat counts. Unknown token usage remains unavailable.
+
 The variables show the description, expected category, and available reviewed
-amount/date context. Each result cell shows the predicted category and reason;
-pass/fail now means that transaction is correct/incorrect, so column pass rates
-are transaction accuracy. Missing predictions fail and receive coverage=0.
-Use the viewer's failure filter to investigate errors and its column controls to
-focus on the variants being compared. Larger comparisons can make the UI slow;
-prefer a small imported view. The evaluation title includes the pilot
-date, transaction/run counts, and frozen dataset identifier.
+amount/date context. Shared table context does not mean every variant received
+all fields; source request artifacts record the exact inputs. The comparison
+imports saved results without new inference or grading calls. Token usage and
+latency remain at run/variant level and are not distributed across transactions.
+Promptfoo may show zero default timing or cost fields on imported cells; those
+are not measurements or dollar costs.
 
-The comparison imports saved results, making no new inference or grading calls.
-Batch token usage and latency stay at run level; they are not distributed across
-transactions. Full run metrics and source artifact paths are retained in cell
-evaluation metadata and the Markdown/JSON reports. Promptfoo may show zero default timing
-or cost fields on imported cells; these are not measurements or dollar costs.
-Shared reviewed context shown in the table does not mean every variant received
-all fields; the source requests record the exact model inputs.
-
-To create this view for an older or interrupted pilot:
+To create the aggregate view for an older or interrupted pilot:
 
 ```bash
+just experiment-view-report data/experiments/pilot-<timestamp>
+# Optional: most recent two variants, with ALL repetitions for each.
 just experiment-view-report data/experiments/pilot-<timestamp> --latest 2
-# Optional: include every saved run (can be slow in the browser).
+# Explicit alias for the default selection.
 just experiment-view-report data/experiments/pilot-<timestamp> --all-runs
 just experiment-view
 ```
 
 The command prints the direct local evaluation URL and saves it in
-`comparison-view.json`. The default is `--latest 2`; recorded evaluation
-timestamps determine recency, falling back to result-file modification times when
-there is no evaluation export. It uses that pilot's original frozen dataset, preserving
-its predictions and reviewed labels. Reimporting creates a fresh comparison;
-earlier evaluations remain available. New runs keep their dataset-level execution
-exports on disk and import only the transaction comparison into viewer history.
-Offline smoke comparisons are explicitly labeled **OFFLINE smoke**.
+`comparison-view.json`. Unlike the earlier run-level selection, `--latest N`
+selects N variants by their most recent completed repetition, using evaluation
+timestamps and falling back to result-file modification times. It never removes
+repetitions from a selected variant. Reimporting uses the original frozen dataset
+and predictions, creates a fresh comparison, and leaves earlier evaluations and
+source artifacts available. Offline comparisons are labeled **OFFLINE smoke**.
 Repetitions are not independent samples; this small diagnostic pilot should guide
 a larger held-out evaluation before changing production behavior.
 
 To extend the experiment, add explicit factors to the Python matrix and provider
 while retaining stable datasets and canonical output IDs. Follow-up suites can
 compare example retrieval, batch sizes, extra transaction context, and other
-models. Keep the current comparison isolated to booking date.
+models. The current configuration omits transaction dates; add new variant
+labels when introducing new factors.
 
 References: [Python provider](https://www.promptfoo.dev/docs/providers/python/),
 [viewer](https://www.promptfoo.dev/docs/usage/web-ui/),

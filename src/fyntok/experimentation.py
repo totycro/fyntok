@@ -22,6 +22,7 @@ from .ai import AMOUNT_INSTRUCTIONS, ResponsesClient, classification_schema
 from .auth import RESOURCE, ChatGPTSession
 from .categorization import relevant_examples, validate_assignments
 from .descriptions import parse_description
+from .experiment_aggregation import aggregate_variants, missing_variants
 from .experiment_view import import_comparison_view, run_label
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -313,7 +314,6 @@ def evaluate(client: Requester, dataset: dict[str, Any], config: dict[str, Any])
                 "transaction_id": ref,
                 "description": group[0]["description"],
                 "amount_cents": group[0]["amount_cents"],
-                **({"booking_date": group[0]["booking_date"]} if config["booking_date"] else {}),
             }
             for ref, group in mapping.items()
         ]
@@ -347,7 +347,7 @@ def evaluate(client: Requester, dataset: dict[str, Any], config: dict[str, Any])
             "id": c["id"],
             "description": c["description"],
             "amount_cents": c["amount_cents"],
-            **({"booking_date": c["booking_date"]} if config["booking_date"] else {}),
+            "booking_date": c["booking_date"],
             "expected": c["expected_category_id"],
             "prediction": predictions.get(c["id"]),
         }
@@ -483,10 +483,9 @@ def variants(models: tuple[str, ...] = MODELS) -> list[dict[str, Any]]:
             "category_names": True,
             "short_refs": True,
             "grouped": False,
-            "booking_date": booking_date,
+            "booking_date": False,
         }
         for model in models
-        for booking_date in (False, True)
     ]
 
 
@@ -542,6 +541,7 @@ def run_pilot(dataset_path: Path, output: Path, *, offline: bool = False) -> Non
             "seed": 17,
             "offline": offline,
             "requests": request_count,
+            "repetitions": 1 if offline else 3,
             "variants": matrix,
         },
     )
@@ -563,10 +563,7 @@ def run_pilot(dataset_path: Path, output: Path, *, offline: bool = False) -> Non
                 f"-r{repetition + 1}"
             )
             config = {
-                "description": (
-                    f"{'OFFLINE smoke | ' if offline else ''}{run_label(key, variant)} | "
-                    f"{len(dataset['cases'])} transactions | {dataset['hash'][:8]}"
-                ),
+                "description": f"{'OFFLINE smoke | ' if offline else ''}{run_label(key, variant)}",
                 "prompts": ["Categorization benchmark"],
                 "providers": [
                     {
@@ -632,9 +629,7 @@ def generate_report(directory: Path) -> None:
     if not results:
         raise ValueError("No completed experiment results found.")
     summary: list[dict[str, Any]] = []
-    by_configuration: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for name, result in results:
-        by_configuration[name.rsplit("-r", 1)[0]].append(result)
         baseline = next(
             (
                 r
@@ -674,31 +669,72 @@ def generate_report(directory: Path) -> None:
                 "result": f"{name}/result.json",
             }
         )
-    stability = {}
-    for key, repetitions in by_configuration.items():
-        predictions: dict[str, list[str | None]] = defaultdict(list)
-        for result in repetitions:
-            for row in result["rows"]:
-                predictions[row["id"]].append(
-                    row["prediction"]["category_id"] if row["prediction"] else None
-                )
-        stability[key] = (
-            sum(None not in p and len(set(p)) == 1 for p in predictions.values()) / len(predictions)
-            if len(repetitions) > 1
-            else None
-        )
+    aggregates = aggregate_variants(directory)
+    variant_summaries = [
+        {k: v for k, v in a.items() if k not in {"runs", "cells"}} for a in aggregates
+    ]
+    stability = {a["name"]: a["consistency"] for a in aggregates}
+    missing = missing_variants(directory, aggregates)
+    incomplete = missing > 0 or any(a["incomplete"] for a in aggregates)
     (directory / "comparison.json").write_text(
-        json.dumps({"runs": summary, "stability": stability}, indent=2) + "\n"
+        json.dumps(
+            {
+                "runs": summary,
+                "variants": variant_summaries,
+                "stability": stability,
+                "incomplete": incomplete,
+                "missing_variants": missing,
+            },
+            indent=2,
+        )
+        + "\n"
     )
     lines = [
         "# Categorization pilot",
         "",
         "Exploratory results; repetitions and duplicate rows are not independent samples.",
         "",
-        "| Run | Accuracy | Description accuracy | Coverage | Tokens | Seconds | "
-        "Improved / worsened |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "## Variant averages",
+        "",
+        "| Variant | Repetitions | Mean accuracy | Accuracy range | Coverage | Consistency | "
+        "Mean tokens | Mean seconds |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
+    for a in aggregates:
+        consistency = f"{a['consistency']:.1%}" if a["consistency"] is not None else "unavailable"
+        tokens = a["mean_token_usage"]
+        count = str(a["repetitions"])
+        if a["incomplete"]:
+            count += f" / {a['planned_repetitions']} planned (incomplete)"
+        label = a["label"].replace("|", "/")
+        lines.append(
+            f"| {label} | {count} | {a['accuracy']:.1%} | "
+            f"{a['accuracy_min']:.1%}-{a['accuracy_max']:.1%} | {a['coverage']:.1%} | "
+            f"{consistency} | {tokens['total'] if tokens else 'unavailable'} | "
+            f"{a['mean_latency_seconds']:.2f} |"
+        )
+    if incomplete:
+        lines.extend(
+            [
+                "",
+                f"**INCOMPLETE: {missing} planned variants have no results; "
+                "averages use available repetitions only.**",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Accuracy averages all repetitions; missing predictions count as incorrect. "
+            "Consistency measures agreement, including consistently wrong predictions. "
+            "Tokens and duration are means per complete run, not per transaction.",
+            "",
+            "## Individual runs",
+            "",
+            "| Run | Accuracy | Description accuracy | Coverage | Tokens | Seconds | "
+            "Improved / worsened |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
     for row in summary:
         lines.append(
             f"| [{row['name']}]({row['result']}) | {row['accuracy']:.1%} | "
@@ -751,8 +787,12 @@ def main() -> None:
     view_report = commands.add_parser("view-report")
     view_report.add_argument("directory", type=Path)
     selection = view_report.add_mutually_exclusive_group()
-    selection.add_argument("--latest", type=int, default=2)
-    selection.add_argument("--all-runs", action="store_true")
+    selection.add_argument(
+        "--latest", type=int, help="Show the latest N variants, retaining all their repetitions"
+    )
+    selection.add_argument(
+        "--all-runs", action="store_true", help="Show all variants and repetitions (the default)"
+    )
     args = parser.parse_args()
     match args.command:
         case "export":

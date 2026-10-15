@@ -1,6 +1,5 @@
 """Import saved classifications as transaction rows in the local Promptfoo viewer."""
 
-import hashlib
 import json
 import os
 import subprocess
@@ -9,21 +8,12 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .experiment_aggregation import aggregate_variants, missing_variants, variant_label
+
 
 def run_label(name: str, config: dict[str, Any]) -> str:
-    model = config["model"].removeprefix("gpt-")
-    repetition = name.rsplit("-r", 1)[-1]
-    if "booking_date" in config:
-        detail = "amount + date" if config["booking_date"] else "amount only"
-    else:
-        detail = ", ".join(
-            (
-                "category names" if config["category_names"] else "category UUIDs",
-                "short refs" if config["short_refs"] else "transaction UUIDs",
-                "grouped" if config["grouped"] else "individual",
-            )
-        )
-    return f"{model} | {detail} | repeat {repetition}"
+    del name
+    return variant_label(config)
 
 
 def completed_at(path: Path) -> float:
@@ -34,18 +24,21 @@ def completed_at(path: Path) -> float:
     return path.stat().st_mtime
 
 
-def comparison_export(directory: Path, *, latest: int | None = 2) -> dict[str, Any]:
-    """Reshape existing evidence; never infer, relabel, or redistribute batch usage."""
+def comparison_export(directory: Path, *, latest: int | None = None) -> dict[str, Any]:
+    """Export one column per variant, averaging all its saved repetitions."""
     dataset = json.loads((directory / "dataset.json").read_text())
     categories = {c["id"]: c["name"] for c in dataset["categories"]}
     cases = dataset["cases"]
-    paths = sorted(directory.glob("*/result.json"))
-    if not paths:
-        raise ValueError("No completed experiment results found.")
+    aggregates = aggregate_variants(directory)
+    missing = missing_variants(directory, aggregates)
+    incomplete = missing > 0 or any(a["incomplete"] for a in aggregates)
     if latest is not None:
         if latest < 1:
-            raise ValueError("Choose at least one latest run.")
-        paths = sorted(paths, key=lambda path: (completed_at(path), path.parent.name))[-latest:]
+            raise ValueError("Choose at least one latest variant.")
+        aggregates = sorted(
+            aggregates,
+            key=lambda a: (max(completed_at(r["path"]) for r in a["runs"]), a["id"]),
+        )[-latest:]
     tests = [
         {
             "description": case["description"],
@@ -61,52 +54,69 @@ def comparison_export(directory: Path, *, latest: int | None = 2) -> dict[str, A
     ]
     prompts = []
     results = []
-    offline_flags = set()
     saved_runs = []
-    for prompt_index, path in enumerate(paths):
-        saved = json.loads(path.read_text())
-        rows = {row["id"]: row for row in saved["rows"]}
-        if (
-            saved["dataset_hash"] != dataset["hash"]
-            or len(rows) != len(saved["rows"])
-            or set(rows) != {c["id"] for c in cases}
-            or any(rows[c["id"]]["expected"] != c["expected_category_id"] for c in cases)
-        ):
-            raise ValueError(f"Saved run does not match its frozen dataset: {path.parent.name}")
-        offline_flags.add(saved["offline"])
-        saved_runs.append(
-            {
-                "name": path.parent.name,
-                "source_result": str(path.resolve()),
-                "metrics": saved["metrics"],
-                "token_usage": saved["tokenUsage"],
-            }
-        )
-        label = run_label(path.parent.name, saved["config"])
-        prompt_id = hashlib.sha256(label.encode()).hexdigest()
-        provider = {"id": f"saved:{path.parent.name}", "label": label}
+    summaries = []
+    for prompt_index, aggregate in enumerate(aggregates):
+        runs = aggregate["runs"]
+        count = aggregate["repetitions"]
+        label = aggregate["label"]
+        prompt_id = aggregate["id"]
+        provider = {"id": f"saved:{prompt_id}", "label": label}
         prompt = {"raw": label, "label": label}
         correct_count = 0
-        covered_count = 0
-        for test_index, case in enumerate(cases):
-            row = rows[case["id"]]
-            prediction = row["prediction"]
-            covered = prediction is not None
-            correct = covered and prediction["category_id"] == row["expected"]
-            correct_count += correct
-            covered_count += covered
-            predicted = categories[prediction["category_id"]] if covered else "NO PREDICTION"
-            reason = (
-                prediction["reason"]
-                if covered
-                else "; ".join(error["message"] for error in saved["errors"])
-                or "The saved run produced no prediction for this transaction."
+        totals: dict[str, float] = {"accuracy": 0, "coverage": 0}
+        if count > 1:
+            totals["consistency"] = 0
+        for run in runs:
+            saved_runs.append(
+                {
+                    "name": run["name"],
+                    "source_result": str(run["path"].resolve()),
+                    "metrics": run["saved"]["metrics"],
+                    "token_usage": run["saved"]["tokenUsage"],
+                }
             )
+        summaries.append({k: v for k, v in aggregate.items() if k not in {"runs", "cells"}})
+        for test_index, (case, cell) in enumerate(zip(cases, aggregate["cells"], strict=True)):
+            score = cell["accuracy"]
+            correct = score == 1
+            correct_count += correct
+            scores = {k: cell[k] for k in totals}
+            for metric, value in scores.items():
+                totals[metric] += value
+            reason = (
+                f"{round(score * count)}/{count} correct ({score:.1%}). "
+                f"Expected: {categories[case['expected_category_id']]}. "
+                "Pass means every repetition was correct."
+            )
+            lines = [reason]
+            repeat_details = []
+            for run in runs:
+                prediction = run["rows"][case["id"]]["prediction"]
+                predicted = categories[prediction["category_id"]] if prediction else "NO PREDICTION"
+                explanation = (
+                    prediction["reason"]
+                    if prediction
+                    else (
+                        "; ".join(e["message"] for e in run["saved"]["errors"])
+                        or "The saved run produced no prediction for this transaction."
+                    )
+                )
+                repetition = run["name"].rsplit("-r", 1)[-1]
+                lines.append(f"Repeat {repetition}: {predicted}\n{explanation}")
+                repeat_details.append(
+                    {
+                        "run": run["name"],
+                        "prediction": prediction,
+                        "source_result": str(run["path"].resolve()),
+                    }
+                )
             grading = {
                 "pass": correct,
-                "score": int(correct),
-                "reason": f"Expected: {categories[row['expected']]}. Predicted: {predicted}.",
-                "namedScores": {"accuracy": int(correct), "coverage": int(covered)},
+                "score": score,
+                "reason": reason,
+                "namedScores": scores,
+                "namedScoreWeights": dict.fromkeys(scores, 1),
             }
             results.append(
                 {
@@ -117,47 +127,57 @@ def comparison_export(directory: Path, *, latest: int | None = 2) -> dict[str, A
                     "prompt": prompt,
                     "testCase": tests[test_index],
                     "vars": tests[test_index]["vars"],
-                    "response": {"output": f"{predicted}\n\n{reason}"},
+                    "response": {"output": "\n\n".join(lines)},
                     "success": correct,
-                    "score": int(correct),
+                    "score": score,
                     "failureReason": 0 if correct else 1,
                     "gradingResult": grading,
-                    "namedScores": grading["namedScores"],
+                    "namedScores": scores,
+                    "namedScoreWeights": grading["namedScoreWeights"],
                     "metadata": {
-                        "source_result": str(path.resolve()),
                         "transaction_id": case["id"],
-                        "offline": saved["offline"],
-                        "timing_note": "Latency and token usage belong to the full saved run.",
+                        "offline": aggregate["offline"],
+                        "repetitions": repeat_details,
+                        "consistency": cell["consistency"],
+                        "timing_note": "Latency and token usage belong to complete saved runs.",
                     },
                 }
             )
+        usage = [r["saved"]["tokenUsage"] for r in runs]
+        tokens = (
+            {k: sum(u[k] for u in usage) for k in usage[0]}
+            if all(u is not None for u in usage)
+            else None
+        )
         prompts.append(
             {
                 "id": prompt_id,
                 **prompt,
                 "provider": provider["id"],
                 "metrics": {
-                    "score": correct_count,
+                    "score": totals["accuracy"],
                     "testPassCount": correct_count,
                     "testFailCount": len(cases) - correct_count,
                     "testErrorCount": 0,
                     "assertPassCount": correct_count,
                     "assertFailCount": len(cases) - correct_count,
-                    "totalLatencyMs": round(saved["metrics"]["latency_seconds"] * 1000),
-                    **({"tokenUsage": saved["tokenUsage"]} if saved["tokenUsage"] else {}),
-                    "namedScores": {"accuracy": correct_count, "coverage": covered_count},
-                    "namedScoresCount": {"accuracy": len(cases), "coverage": len(cases)},
-                    "namedScoreWeights": {"accuracy": 1, "coverage": 1},
+                    "totalLatencyMs": round(
+                        sum(r["saved"]["metrics"]["latency_seconds"] for r in runs) * 1000
+                    ),
+                    **({"tokenUsage": tokens} if tokens is not None else {}),
+                    "namedScores": totals,
+                    "namedScoresCount": dict.fromkeys(totals, len(cases)),
+                    "namedScoreWeights": dict.fromkeys(totals, len(cases)),
                 },
             }
         )
-    if len(offline_flags) != 1:
-        raise ValueError("Do not combine offline fixtures and live model evidence.")
     title = (
-        f"{'OFFLINE smoke | ' if True in offline_flags else ''}Categorization comparison | "
+        f"{'OFFLINE smoke | ' if aggregates[0]['offline'] else ''}Categorization comparison | "
         f"{directory.name.removeprefix('pilot-')[:8]} | {len(cases)} transactions | "
-        f"{len(paths)} runs | {dataset['hash'][:8]}"
+        f"{len(aggregates)} variants | {len(saved_runs)} runs | {dataset['hash'][:8]}"
     )
+    if incomplete:
+        title += f" | INCOMPLETE ({missing} variants without results)"
     return {
         "evalId": f"eval-categorization-{uuid4().hex[:12]}",
         "results": {
@@ -175,12 +195,15 @@ def comparison_export(directory: Path, *, latest: int | None = 2) -> dict[str, A
                 "saved_results_only": True,
                 "latest": latest,
                 "saved_runs": saved_runs,
+                "variants": summaries,
+                "incomplete": incomplete,
+                "missing_variants": missing,
             },
         },
     }
 
 
-def import_comparison_view(directory: Path, *, latest: int | None = 2) -> str:
+def import_comparison_view(directory: Path, *, latest: int | None = None) -> str:
     export = comparison_export(directory, latest=latest)
     path = directory / "comparison.eval.json"
     path.write_text(json.dumps(export, ensure_ascii=False, indent=2) + "\n")
