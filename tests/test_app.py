@@ -47,7 +47,7 @@ def test_cleaned_transaction_description_ui(tmp_path: Path, description: str, cl
             table = next(
                 t
                 for t in user.find(ui.table).elements
-                if "description" in {c["name"] for c in t.columns}
+                if "value_date" in {c["name"] for c in t.columns}
             )
             column = next(c for c in table.columns if c["name"] == "description")
             assert column["label"] == "Description"
@@ -125,7 +125,7 @@ def test_internal_transfers_remain_in_table_but_not_statistics(tmp_path: Path) -
             table = next(
                 t
                 for t in user.find(ui.table).elements
-                if "description" in {c["name"] for c in t.columns}
+                if "value_date" in {c["name"] for c in t.columns}
             )
             assert len(table.rows) == 1
             assert table.rows[0]["category_id"] == transfer
@@ -332,7 +332,7 @@ def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
             table = next(
                 t
                 for t in user.find(ui.table).elements
-                if "description" in {c["name"] for c in t.columns}
+                if "value_date" in {c["name"] for c in t.columns}
             )
             table.mark("before-confirmation")
             from nicegui import events
@@ -369,7 +369,7 @@ def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
             table = next(
                 t
                 for t in user.find(ui.table).elements
-                if "description" in {c["name"] for c in t.columns}
+                if "value_date" in {c["name"] for c in t.columns}
             )
             table.mark("before-undo")
             with user:
@@ -761,5 +761,86 @@ def test_ui_refreshes_signed_in_account_and_selects_account_for_actions(
 
     try:
         asyncio.run(scenario())
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("replace_before_delete", [False, True])
+def test_manual_examples_ui(tmp_path: Path, replace_before_delete: bool) -> None:
+    from fyntok.queries import example_rows
+
+    engine = open_database(tmp_path / "examples-ui.sqlite3")
+    import_content(engine, b"a;Shop;01.01.2024;02.01.2024;-10,00;EUR\n", "synthetic.csv")
+    food = save_category(engine, "Food", "Groceries")
+    tid = transaction_rows(engine)[0]["id"]
+    correct_transaction(engine, tid, food)
+    before = transaction_rows(engine)
+
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(engine, auth=ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            user.find("Description contains").type("No matching transaction")
+            if replace_before_delete:
+                user.find("Booking date from").type("2025-01-01")
+                user.find("Through").type("2024-01-01")
+            user.find("Apply filters").click()
+            user.find(kind=ui.tab, content="Manual examples").click()
+            await user.should_see("1 manual examples")
+            await user.should_see("0 matching transactions")
+            if replace_before_delete:
+                await user.should_see("Start date must be before the end date.")
+
+            def open_deletion() -> None:
+                table = user.find(marker="manual-examples-table").elements.pop()
+                assert isinstance(table, ui.table)
+                assert table.rows[0]["category"] == "Food"
+                assert table.rows[0]["amount_cents"] == -1000
+                assert table.rows[0]["cleaned_description"] == "Shop"
+                with user:
+                    assert user.client is not None
+                    listener = next(
+                        item
+                        for item in table._event_listeners.values()
+                        if item.type == "deleteExample"
+                    )
+                    events.handle_event(
+                        listener.handler,
+                        events.GenericEventArguments(
+                            sender=table, client=user.client, args=table.rows[0]
+                        ),
+                    )
+
+            open_deletion()
+            await user.should_see("Delete manual example?")
+            await user.should_see("Category: Food")
+            user.find(kind=ui.button, content="Cancel").click()
+            assert len(example_rows(engine)) == 1
+            open_deletion()
+            if replace_before_delete:
+                correct_transaction(engine, tid, food)
+            user.find(kind=ui.button, content="Delete example").click()
+            if replace_before_delete:
+                await user.should_see(
+                    "Example changed or was deleted elsewhere. Refresh and try again."
+                )
+                assert len(example_rows(engine)) == 1
+                user.find(kind=ui.button, content="Cancel").click()
+                user.find(marker="manual-examples-table").elements.pop().mark("stale-examples")
+                user.find("Apply filters").click()
+                await user.should_not_see(marker="stale-examples")
+                open_deletion()
+                user.find(kind=ui.button, content="Delete example").click()
+            await user.should_see("0 manual examples")
+            await user.should_see("No manual examples yet.")
+            panels = list(user.find(ui.tab_panels).elements)
+            assert any(panel.value == "Manual examples" for panel in panels)
+            assert example_rows(engine) == []
+
+    try:
+        asyncio.run(scenario())
+        if not replace_before_delete:
+            assert transaction_rows(engine) == before
     finally:
         engine.dispose()

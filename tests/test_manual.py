@@ -275,3 +275,44 @@ def test_repeated_undo_walks_back_history_and_survives_reload(engine: Engine) ->
             assert require_record(session.get(Transaction, tid)).revision == 9
     finally:
         reopened.dispose()
+
+
+def test_example_listing_and_deletion_preserve_assignments(engine: Engine) -> None:
+    from fyntok.categorization import latest_examples
+    from fyntok.manual import delete_example
+    from fyntok.queries import example_rows
+
+    food = save_category(engine, "Food", "Groceries")
+    ids = [row["id"] for row in transaction_rows(engine)]
+    first = correct_transaction(engine, ids[0], food)
+    second = correct_transaction(engine, ids[1], food)
+    examples = example_rows(engine)
+    assert [row["id"] for row in examples] == [ids[1], ids[0]]
+    row = examples[0]
+    assert row["assignment_id"] == second
+    assert row["category"] == "Food" and row["category_id"] == food
+    transaction = next(row for row in transaction_rows(engine) if row["id"] == ids[1])
+    for field in ("description", "cleaned_description", "booking_date", "amount_cents", "currency"):
+        assert row[field] == transaction[field]
+    assert row["confirmed_at"] is not None
+    assert "account" not in row
+    before_rows = transaction_rows(engine)
+    before_history = assignment_history(engine, ids[1])
+    before_totals = aggregate(engine)
+    delete_example(engine, ids[1], expected_assignment_id=second)
+    assert [row["id"] for row in example_rows(engine)] == [ids[0]]
+    assert transaction_rows(engine) == before_rows
+    assert assignment_history(engine, ids[1]) == before_history
+    assert aggregate(engine) == before_totals
+    with Session(engine) as session:
+        assert [row["example_id"] for row in latest_examples(session)] == [ids[0]]
+    with pytest.raises(EditConflict, match="Refresh"):
+        delete_example(engine, ids[1], expected_assignment_id=second)
+    replacement = correct_transaction(engine, ids[0], food)
+    with pytest.raises(EditConflict, match="Refresh"):
+        delete_example(engine, ids[0], expected_assignment_id=first)
+    assert example_rows(engine)[0]["assignment_id"] == replacement
+    delete_example(engine, ids[0], expected_assignment_id=replacement)
+    assert example_rows(engine) == []
+    correct_transaction(engine, ids[1], food)
+    assert [row["id"] for row in example_rows(engine)] == [ids[1]]

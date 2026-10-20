@@ -21,12 +21,13 @@ from .manual import (
     assignment_history,
     categories,
     correct_transaction,
+    delete_example,
     remove_category,
     save_category,
     undo_assignment,
 )
 from .models import Import, Transaction
-from .queries import Filters, transaction_rows
+from .queries import Filters, example_rows, transaction_rows
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +393,33 @@ def build_page(
         dialog.on("hide", dialog.delete)
         dialog.open()
 
+    def example_removal(row: dict[str, Any]) -> None:
+        with ui.dialog() as dialog, ui.card().classes("w-full max-w-xl"):
+            ui.label("Delete manual example?").classes("text-xl")
+            ui.label(row["cleaned_description"]).classes("whitespace-pre-wrap")
+            ui.label(f"Category: {row['category']}")
+            ui.label(
+                "This removes the example from future AI guidance. The transaction's "
+                "category, manual protection, and assignment history remain unchanged. "
+                "Confirming the transaction again creates a new example."
+            )
+            with ui.row():
+                ui.button(
+                    "Delete example",
+                    on_click=lambda: perform(
+                        lambda: delete_example(
+                            engine, row["id"], expected_assignment_id=row["assignment_id"]
+                        ),
+                        dialog,
+                        "Delete manual example",
+                    ),
+                ).props("color=negative")
+                ui.button(
+                    "Cancel", on_click=lambda: close_dialog(dialog, "Cancel example deletion")
+                ).props("flat")
+        dialog.on("hide", dialog.delete)
+        dialog.open()
+
     selected_tab = {"value": "Analysis"}
 
     def select_tab(event: events.ValueChangeEventArguments[Any]) -> None:
@@ -408,7 +436,7 @@ def build_page(
         except ValueError as exc:
             logger.exception("Refresh results failed: invalid filters (%s)", type(exc).__name__)
             ui.label(str(exc)).classes("text-red-700")
-            return
+            rows, monthly, summaries = [], [], []
         logger.debug("Refresh results: displaying %d matching transactions", len(rows))
         ui.label(f"{len(rows):,} matching transactions in the transaction list").classes("text-xl")
         ui.label(
@@ -420,6 +448,7 @@ def build_page(
             dashboard = ui.tab("Analysis")
             transactions = ui.tab("Transactions")
             category_tab = ui.tab("Categories")
+            examples_tab = ui.tab("Manual examples")
             imports = ui.tab("Import history")
         with ui.tab_panels(tabs, value=selected_tab["value"]).classes("w-full"):
             with ui.tab_panel(dashboard):
@@ -492,6 +521,53 @@ def build_page(
                                 ui.button(
                                     "Delete", on_click=lambda c=c: category_removal(c, False)
                                 ).props("flat")
+            with ui.tab_panel(examples_tab):
+                examples = example_rows(engine)
+                ui.label(f"{len(examples):,} manual examples").classes("text-xl")
+                ui.label(
+                    "Human-confirmed examples used as AI guidance. "
+                    "This list shows all examples regardless of transaction filters."
+                )
+                if not examples:
+                    ui.label("No manual examples yet. Confirm a transaction's category to add one.")
+                else:
+                    example_table = (
+                        ui.table(
+                            columns=[
+                                *columns(
+                                    "description",
+                                    "category",
+                                    "booking_date",
+                                    "amount",
+                                    "currency",
+                                    "confirmed_at",
+                                    money_columns=("amount",),
+                                ),
+                                {"name": "actions", "label": "", "field": "actions"},
+                            ],
+                            rows=[
+                                dict(
+                                    row,
+                                    booking_date=row["booking_date"].isoformat(),
+                                    confirmed_at=row["confirmed_at"].isoformat(),
+                                )
+                                for row in examples
+                            ],
+                            row_key="id",
+                            pagination=25,
+                        )
+                        .classes("w-full")
+                        .mark("manual-examples-table")
+                    )
+                    example_table.add_slot(
+                        "body-cell-actions",
+                        """<q-td :props="props">
+                            <q-btn flat dense no-caps color="negative" label="Delete"
+                                :aria-label="'Delete example: ' + props.row.cleaned_description"
+                                @click="$parent.$emit('deleteExample', props.row)" />
+                        </q-td>""",
+                    )
+                    example_table.on("deleteExample", lambda event: example_removal(event.args))
             with ui.tab_panel(imports):
                 with Session(engine) as session:
                     records = [

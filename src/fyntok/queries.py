@@ -10,7 +10,7 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Select
 
 from .descriptions import parse_description
-from .models import Assignment, Category, Transaction
+from .models import Assignment, Category, ConfirmedExample, Transaction
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,38 @@ class Filters:
 
 
 DEFAULT_FILTERS = Filters()
+
+
+def example_rows(engine: Engine) -> list[dict[str, Any]]:
+    """List current human-confirmed guidance, independently of transaction filters."""
+    t, e, c = Transaction, ConfirmedExample, Category
+    query = (
+        select(
+            t.id,
+            t.description,
+            t.account,
+            t.booking_date,
+            t.amount_cents,
+            t.currency,
+            e.assignment_id,
+            e.category_id,
+            e.confirmed_at,
+            c.name.label("category"),
+        )
+        .select_from(e)
+        .join(t, t.id == e.transaction_id)
+        .join(c, c.id == e.category_id)
+        .order_by(e.confirmed_at.desc(), t.id)
+    )
+    with engine.connect() as connection:
+        rows: list[dict[str, Any]] = []
+        for result in connection.execute(query).mappings():
+            row = dict(result)
+            row["cleaned_description"] = parse_description(
+                row["description"], row.pop("account")
+            ).cleaned_description
+            rows.append(row)
+        return rows
 
 
 def transaction_rows(engine: Engine, filters: Filters = DEFAULT_FILTERS) -> list[dict[str, Any]]:

@@ -146,6 +146,16 @@ def correct_transaction(
         ).id
 
 
+def delete_example(engine: Engine, transaction_id: str, *, expected_assignment_id: str) -> None:
+    """Remove teaching guidance without changing the transaction or assignment history."""
+    with Session(engine) as session, session.begin():
+        session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        example = session.get(ConfirmedExample, transaction_id)
+        if example is None or example.assignment_id != expected_assignment_id:
+            raise EditConflict("Example changed or was deleted elsewhere. Refresh and try again.")
+        session.delete(example)
+
+
 def undo_assignment(
     engine: Engine, transaction_id: str, *, expected_revision: int | None = None
 ) -> str:

@@ -231,3 +231,31 @@ def test_edits_during_request_and_undo_afterwards(bank: Engine, edit: str) -> No
         assert result["skipped"] == 1
     else:
         assert result["skipped"] == 2 and assignment_count(bank) == 0
+
+
+def test_deleting_example_during_request_skips_stale_guidance(bank: Engine) -> None:
+    from fyntok.manual import delete_example
+    from fyntok.models import CategorizationRun
+
+    food = save_category(bank, "Food", "Groceries")
+    tid = transaction_rows(bank)[0]["id"]
+    assignment_id = correct_transaction(bank, tid, food)
+    run_id = start_run(bank, "model")
+
+    class Deleting(Advisor):
+        @override
+        def classify(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert [e["example_id"] for e in payload["confirmed_examples"]] == [tid]
+            delete_example(bank, tid, expected_assignment_id=assignment_id)
+            return super().classify(model, payload)
+
+    result = execute_run(bank, Deleting(), run_id)
+    assert result["applied"] == 0 and result["skipped"] == 2
+    assert assignment_count(bank) == 1
+    fresh_id = start_run(bank, "model")
+    with Session(bank) as session:
+        assert require_record(session.get(CategorizationRun, run_id)).example_snapshot
+        assert require_record(session.get(CategorizationRun, fresh_id)).example_snapshot == []
+    assert execute_run(bank, Advisor(), fresh_id)["applied"] == 1
+    manual = next(row for row in transaction_rows(bank) if row["id"] == tid)
+    assert manual["protected"] and manual["category_id"] == food
