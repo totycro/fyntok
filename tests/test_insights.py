@@ -14,7 +14,8 @@ from nicegui.testing.user_simulation import user_simulation
 from sqlalchemy.engine import Engine
 
 from fyntok.analysis import aggregate
-from fyntok.app import build_page
+from fyntok.analysis_ui import AnalysisState, build_analysis
+from fyntok.app import build_page, columns, money
 from fyntok.auth import ChatGPTSession
 from fyntok.charts import breakdown_figure, cashflow_figure, spending_heatmap
 from fyntok.database import open_database
@@ -343,6 +344,63 @@ def test_overview_defaults_to_completed_month(
         asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("state", "filters", "expected"),
+    [
+        (AnalysisState(month="2024-03"), Filters(), "March 2024"),
+        (
+            AnalysisState(view="Historical explorer", history_period="2024"),
+            Filters(),
+            "2024",
+        ),
+        (
+            AnalysisState(
+                view="Historical explorer",
+                history_period="Custom dates",
+                custom_start="2024-02-10",
+                custom_end="2024-03-20",
+            ),
+            Filters(),
+            "2024-02-10 through 2024-03-20",
+        ),
+        (
+            AnalysisState(month="2024-03"),
+            Filters(start=date(2024, 3, 10), end=date(2024, 3, 20), currency="EUR"),
+            "2024-03-10 through 2024-03-20",
+        ),
+        (AnalysisState(month="2024-04"), Filters(), "April 2024"),
+        (AnalysisState(), Filters(search="No matching transaction"), None),
+        (
+            AnalysisState(
+                view="Historical explorer",
+                history_period="Custom dates",
+                custom_start="invalid",
+            ),
+            Filters(),
+            None,
+        ),
+    ],
+)
+def test_analysis_context_uses_effective_period(
+    ledger: Engine, state: AnalysisState, filters: Filters, expected: str | None
+) -> None:
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_analysis(ledger, filters, state, lambda _row: None, money, columns)
+        ) as user:
+            await user.open("/")
+            if expected is None:
+                await user.should_not_see(marker="analysis-context")
+            else:
+                context = user.find(marker="analysis-context").elements.pop()
+                labels = [
+                    label.text for label in context.descendants() if isinstance(label, ui.label)
+                ]
+                assert labels == [expected, f"{state.view} · EUR"]
+
+    asyncio.run(scenario())
+
+
 def test_analysis_navigation_and_drilldown_preserve_state(ledger: Engine, tmp_path: Path) -> None:
     async def scenario() -> None:
         async with user_simulation(
@@ -357,6 +415,7 @@ def test_analysis_navigation_and_drilldown_preserve_state(ledger: Engine, tmp_pa
             with user:
                 month.set_value("2024-03")
             await user.should_see("70.00 EUR")
+            await user.should_see("March 2024")
             user.find(marker="analysis-drill").click()
             await user.should_see("Transactions behind this report")
             dialog = next(d for d in user.find(ui.dialog).elements if d.value)
@@ -368,6 +427,7 @@ def test_analysis_navigation_and_drilldown_preserve_state(ledger: Engine, tmp_pa
             month = user.find("Overview month").elements.pop()
             assert isinstance(month, ui.select)
             assert month.value == "2024-03"
+            await user.should_see("March 2024")
             breakdown = user.find(marker="analysis-breakdown-table").elements.pop()
             assert isinstance(breakdown, ui.table)
             food = next(row for row in breakdown.rows if row["name"] == "Food")
@@ -396,6 +456,7 @@ def test_analysis_navigation_and_drilldown_preserve_state(ledger: Engine, tmp_pa
             await user.should_see("average 34.00 EUR")
             await user.should_see("What changed?")
             await user.should_see("Compare with")
+            await user.should_see("Historical explorer · EUR")
             await user.should_see(marker="analysis-month-table")
             grouping = user.find("Trend grouping").elements.pop()
             assert isinstance(grouping, ui.select)
@@ -435,6 +496,24 @@ def test_analysis_navigation_and_drilldown_preserve_state(ledger: Engine, tmp_pa
             user.find("Back to analysis").click()
             assert grouping.value == "Yearly"
             assert view.value == "Historical explorer"
+
+    asyncio.run(scenario())
+
+
+def test_analysis_context_updates_currency(ledger: Engine, tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(ledger, auth=ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            await user.should_see("Monthly overview · EUR")
+            currency = user.find("Analysis currency").elements.pop()
+            assert isinstance(currency, ui.select)
+            with user:
+                currency.set_value("USD")
+            await user.should_see("Monthly overview · USD")
+            await user.should_see("March 2024")
+            await user.should_not_see("Monthly overview · EUR")
 
     asyncio.run(scenario())
 

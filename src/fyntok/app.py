@@ -429,8 +429,8 @@ def build_page(
             category_tab = ui.tab("Categories")
             examples_tab = ui.tab("Manual examples")
             imports = ui.tab("Import history")
-        with ui.tab_panels(tabs, value=selected_tab["value"]).classes("w-full"):
-            with ui.tab_panel(dashboard):
+        with ui.tab_panels(tabs, value=selected_tab["value"]).classes("w-full report-panels"):
+            with ui.tab_panel(dashboard).classes("analysis-panel"):
                 if valid_filters:
                     build_analysis(engine, f, analysis_state, transaction_editor, money, columns)
             with ui.tab_panel(transactions):

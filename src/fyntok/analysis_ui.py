@@ -48,6 +48,24 @@ def build_analysis(
     money: Callable[[int], str],
     columns: Callable[..., list[dict[str, Any]]],
 ) -> None:
+    # Quasar's panel wrappers otherwise become scroll containers and prevent the
+    # report context from sticking to the viewport. Only relax the Analysis panel.
+    ui.add_css("""
+        .report-panels:has(.analysis-panel),
+        .report-panels > .q-panel:has(> .analysis-panel) {
+            overflow: visible;
+        }
+        .analysis-context {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: #eff6ff;
+            border-left: 4px solid #2563eb;
+            border-bottom: 1px solid #bfdbfe;
+            box-shadow: 0 2px 6px rgb(30 64 175 / 12%);
+        }
+    """)
+
     def update(attribute: str, value: Any) -> None:
         setattr(state, attribute, value)
         dashboard.refresh()
@@ -195,9 +213,22 @@ def build_analysis(
         )
         if not report.totals["outgoing_cents"] and not report.totals["incoming_cents"]:
             ui.label("No financial activity matches these filters in this period.")
-        ui.label(f"Selected period · {selected.start} through {selected.end}").classes(
-            "font-medium"
-        )
+        if selected == Period(date(selected.start.year, 1, 1), date(selected.start.year, 12, 31)):
+            period_label = str(selected.start.year)
+        elif selected == month_period(selected.start):
+            period_label = selected.start.strftime("%B %Y")
+        else:
+            period_label = f"{selected.start} through {selected.end}"
+        with (
+            ui.row()
+            .classes("analysis-context w-full items-center gap-x-4 gap-y-1 px-3 py-3")
+            .props('role="group" aria-label="Selected analysis context"')
+            .mark("analysis-context")
+        ):
+            ui.label(period_label).classes("text-lg font-semibold text-blue-900").props(
+                f'title="Selected period: {selected.start} through {selected.end}"'
+            )
+            ui.label(f"{state.view} · {chosen}").classes("text-sm text-gray-700")
         partial = selected.start < first or selected.end > last or selected.end > date.today()
         if partial or selected.start.day != 1 or selected.end != month_period(selected.end).end:
             ui.label(
