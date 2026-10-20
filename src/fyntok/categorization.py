@@ -4,6 +4,7 @@ import fcntl
 import logging
 import re
 from collections.abc import Callable, Generator
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -24,6 +25,7 @@ from .queries import Filters, transaction_rows
 
 DEFAULT_FILTERS = Filters()
 BATCH_SIZE = 25
+MAX_CONCURRENT_REQUESTS = 4
 logger = logging.getLogger(__name__)
 
 
@@ -275,6 +277,192 @@ def execute_run(
         return _execute_run(engine, client, run_id, on_progress)
 
 
+def _claim_batch(
+    engine: Engine,
+    run_id: str,
+    snapshot: list[dict[str, Any]],
+    examples: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Claim one disjoint batch; only the coordinator accesses the database."""
+    with Session(engine) as session, session.begin():
+        session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        if require_record(session.get(CategorizationRun, run_id)).status == "cancelled":
+            return None
+        items = list(
+            session.scalars(
+                select(RunItem)
+                .where(RunItem.run_id == run_id, RunItem.status == "pending")
+                .order_by(RunItem.transaction_id)
+                .limit(BATCH_SIZE)
+            )
+        )
+        if not items:
+            return None
+        targets = []
+        for item in items:
+            transaction = require_record(session.get(Transaction, item.transaction_id))
+            targets.append(
+                {
+                    "transaction_id": transaction.id,
+                    "amount_cents": transaction.amount_cents,
+                    "description": parse_description(
+                        transaction.description, transaction.account
+                    ).cleaned_description,
+                }
+            )
+            item.status, item.attempts = "running", item.attempts + 1
+    return {
+        "categories": [{k: v for k, v in c.items() if k != "revision"} for c in snapshot],
+        "confirmed_examples": relevant_examples(examples, targets),
+        "transactions": targets,
+    }
+
+
+def _request_batch(
+    client: Classifier,
+    model: str,
+    run_id: str,
+    batch_number: int,
+    payload: dict[str, Any],
+    snapshot: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    logger.debug(
+        "Categorization run %s, batch %d: requesting AI assignments; "
+        "transactions=%d, confirmed examples=%d",
+        run_id,
+        batch_number,
+        len(payload["transactions"]),
+        len(payload["confirmed_examples"]),
+    )
+    request_started = monotonic()
+    # Context variables must be set in the request thread, not the coordinator.
+    with trace_batch(run_id, batch_number):
+        assignments = validate_assignments(
+            client.classify(model, payload), payload["transactions"], snapshot
+        )
+    logger.debug(
+        "Categorization run %s, batch %d: response validated in %.2fs; assignments=%d",
+        run_id,
+        batch_number,
+        monotonic() - request_started,
+        len(assignments),
+    )
+    return assignments
+
+
+def _apply_batch(
+    engine: Engine,
+    run_id: str,
+    batch_number: int,
+    assignments: list[dict[str, Any]],
+    snapshot: list[dict[str, Any]],
+    examples: list[dict[str, Any]],
+) -> bool:
+    applied = skipped = 0
+    with Session(engine) as session, session.begin():
+        session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        if require_record(session.get(CategorizationRun, run_id)).status == "cancelled":
+            return False
+        current_categories = [
+            {
+                "id": c.id,
+                "name": c.name,
+                "definition": c.definition,
+                "kind": c.kind,
+                "revision": c.revision,
+            }
+            for c in session.scalars(
+                select(Category).where(Category.archived.is_(False)).order_by(Category.name)
+            )
+        ]
+        category_changed = current_categories != snapshot
+        current_examples = latest_examples(session)
+        examples_changed = current_examples != examples
+        for result in assignments:
+            item = require_record(session.get(RunItem, (run_id, result["transaction_id"])))
+            t = require_record(session.get(Transaction, item.transaction_id))
+            active = _active(session, t.id)
+            item.result = result
+            if (
+                category_changed
+                or examples_changed
+                or t.revision != item.expected_revision
+                or (active and (active.protected or active.source == "manual"))
+            ):
+                item.status = "skipped"
+                item.error = (
+                    "Categories, confirmed examples, or transaction changed during the run."
+                )
+                skipped += 1
+                continue
+            assignment = _assign(session, t, result["category_id"], "ai", result["reason"])
+            assignment.run_id = run_id
+            item.applied_assignment_id, item.status = assignment.id, "applied"
+            applied += 1
+    logger.debug(
+        "Categorization run %s, batch %d: committed; applied=%d, skipped=%d, "
+        "categories changed=%s, confirmed examples changed=%s",
+        run_id,
+        batch_number,
+        applied,
+        skipped,
+        category_changed,
+        examples_changed,
+    )
+    return True
+
+
+def _run_cancelled(engine: Engine, run_id: str) -> bool:
+    with Session(engine) as session:
+        status = session.scalar(
+            select(CategorizationRun.status).where(CategorizationRun.id == run_id)
+        )
+        return require_record(status) == "cancelled"
+
+
+def _process_batches(
+    engine: Engine,
+    client: Classifier,
+    run_id: str,
+    model: str,
+    snapshot: list[dict[str, Any]],
+    examples: list[dict[str, Any]],
+    on_progress: Callable[[dict[str, Any]], object] | None,
+) -> None:
+    batch_number = 0
+    outstanding: dict[Future[list[dict[str, Any]]], int] = {}
+    # Shutdown waits for all calls, including on failure/cancellation. The outer
+    # worker lock therefore prevents recovery from overlapping abandoned calls.
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_REQUESTS) as pool:
+        while True:
+            if _run_cancelled(engine, run_id):
+                return
+            while len(outstanding) < MAX_CONCURRENT_REQUESTS:
+                # Observe completed calls (especially errors) before dispatching more.
+                if any(future.done() for future in outstanding):
+                    break
+                payload = _claim_batch(engine, run_id, snapshot, examples)
+                if payload is None:
+                    break
+                batch_number += 1
+                future = pool.submit(
+                    _request_batch, client, model, run_id, batch_number, payload, snapshot
+                )
+                outstanding[future] = batch_number
+            if not outstanding:
+                return
+            completed, _ = wait(outstanding, timeout=0.1, return_when=FIRST_COMPLETED)
+            for future in completed:
+                number = outstanding.pop(future)
+                if _run_cancelled(engine, run_id):
+                    return
+                assignments = future.result()
+                if not _apply_batch(engine, run_id, number, assignments, snapshot, examples):
+                    return
+                if on_progress:
+                    on_progress(run_progress(engine, run_id))
+
+
 def _execute_run(
     engine: Engine,
     client: Classifier,
@@ -298,125 +486,18 @@ def _execute_run(
         len(snapshot),
         len(examples),
     )
-    batch_number = 0
     try:
-        while True:
-            with Session(engine) as session, session.begin():
-                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
-                if require_record(session.get(CategorizationRun, run_id)).status == "cancelled":
-                    break
-                items = list(
-                    session.scalars(
-                        select(RunItem)
-                        .where(RunItem.run_id == run_id, RunItem.status == "pending")
-                        .order_by(RunItem.transaction_id)
-                        .limit(BATCH_SIZE)
-                    )
-                )
-                if not items:
-                    require_record(session.get(CategorizationRun, run_id)).status = "completed"
-                    break
-                targets = []
-                for item in items:
-                    t = require_record(session.get(Transaction, item.transaction_id))
-                    targets.append(
-                        {
-                            "transaction_id": t.id,
-                            "amount_cents": t.amount_cents,
-                            "description": parse_description(
-                                t.description, t.account
-                            ).cleaned_description,
-                        }
-                    )
-                    item.status, item.attempts = "running", item.attempts + 1
-            payload = {
-                "categories": [{k: v for k, v in c.items() if k != "revision"} for c in snapshot],
-                "confirmed_examples": relevant_examples(examples, targets),
-                "transactions": targets,
-            }
-            batch_number += 1
-            logger.debug(
-                "Categorization run %s, batch %d: requesting AI assignments; "
-                "transactions=%d, confirmed examples=%d",
-                run_id,
-                batch_number,
-                len(targets),
-                len(payload["confirmed_examples"]),
-            )
-            request_started = monotonic()
-            with trace_batch(run_id, batch_number):
-                assignments = validate_assignments(
-                    client.classify(model, payload), targets, snapshot
-                )
-            logger.debug(
-                "Categorization run %s, batch %d: response validated in %.2fs; assignments=%d",
-                run_id,
-                batch_number,
-                monotonic() - request_started,
-                len(assignments),
-            )
-            applied = skipped = 0
-            with Session(engine) as session, session.begin():
-                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
-                if require_record(session.get(CategorizationRun, run_id)).status == "cancelled":
-                    for item in session.scalars(
-                        select(RunItem).where(RunItem.run_id == run_id, RunItem.status == "running")
-                    ):
-                        item.status = "pending"
-                    logger.debug(
-                        "Categorization run %s, batch %d: cancelled; discarding response",
-                        run_id,
-                        batch_number,
-                    )
-                    break
-                current_categories = [
-                    {
-                        "id": c.id,
-                        "name": c.name,
-                        "definition": c.definition,
-                        "kind": c.kind,
-                        "revision": c.revision,
-                    }
-                    for c in session.scalars(
-                        select(Category).where(Category.archived.is_(False)).order_by(Category.name)
-                    )
-                ]
-                category_changed = current_categories != snapshot
-                current_examples = latest_examples(session)
-                examples_changed = current_examples != examples
-                for result in assignments:
-                    item = require_record(session.get(RunItem, (run_id, result["transaction_id"])))
-                    t = require_record(session.get(Transaction, item.transaction_id))
-                    active = _active(session, t.id)
-                    item.result = result
-                    if (
-                        category_changed
-                        or examples_changed
-                        or t.revision != item.expected_revision
-                        or (active and (active.protected or active.source == "manual"))
-                    ):
-                        item.status = "skipped"
-                        item.error = (
-                            "Categories, confirmed examples, or transaction changed during the run."
-                        )
-                        skipped += 1
-                        continue
-                    assignment = _assign(session, t, result["category_id"], "ai", result["reason"])
-                    assignment.run_id = run_id
-                    item.applied_assignment_id, item.status = assignment.id, "applied"
-                    applied += 1
-            logger.debug(
-                "Categorization run %s, batch %d: committed; applied=%d, skipped=%d, "
-                "categories changed=%s, confirmed examples changed=%s",
-                run_id,
-                batch_number,
-                applied,
-                skipped,
-                category_changed,
-                examples_changed,
-            )
-            if on_progress:
-                on_progress(run_progress(engine, run_id))
+        _process_batches(engine, client, run_id, model, snapshot, examples, on_progress)
+        with Session(engine) as session, session.begin():
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            run = require_record(session.get(CategorizationRun, run_id))
+            if run.status == "cancelled":
+                for item in session.scalars(
+                    select(RunItem).where(RunItem.run_id == run_id, RunItem.status == "running")
+                ):
+                    item.status = "pending"
+            else:
+                run.status = "completed"
     except Exception as exc:
         logger.exception("Categorization run %s failed (%s)", run_id, type(exc).__name__)
         # No raw transport errors or response bodies are stored: they may contain private data.

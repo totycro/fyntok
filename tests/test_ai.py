@@ -216,6 +216,7 @@ def test_completed_batches_survive_a_later_failure_and_reopening(
     from fyntok import categorization
 
     monkeypatch.setattr(categorization, "BATCH_SIZE", 1)
+    monkeypatch.setattr(categorization, "MAX_CONCURRENT_REQUESTS", 1)
     path = tmp_path / "batches.sqlite3"
     engine = open_database(path)
     import_content(

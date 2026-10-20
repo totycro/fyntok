@@ -5,6 +5,7 @@ import logging
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
+from threading import Barrier
 from typing import Any, override
 
 import httpx
@@ -220,11 +221,13 @@ def test_classification_traces_include_run_batches_and_proposals_have_no_run_con
     monkeypatch.setattr(categorization, "BATCH_SIZE", 1)
     engine = open_database(tmp_path / "sample.sqlite3")
     root = tmp_path / "traces"
+    simultaneous_requests = Barrier(2)
 
     def respond(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         payload = json.loads(body["input"][0]["content"])
         if "transactions" in payload:
+            simultaneous_requests.wait(timeout=5)
             result = {
                 "assignments": [
                     {
@@ -253,11 +256,11 @@ def test_classification_traces_include_run_batches_and_proposals_have_no_run_con
     finally:
         engine.dispose()
     metadata = [json.loads((d / "metadata.json").read_text()) for d in sorted(root.iterdir())]
-    assert [(m["run_id"], m["batch_number"], m["operation"]) for m in metadata] == [
+    assert {(m["run_id"], m["batch_number"], m["operation"]) for m in metadata} == {
         (run_id, 1, "classify"),
         (run_id, 2, "classify"),
         (None, None, "propose"),
-    ]
+    }
 
 
 @pytest.mark.parametrize("tracing", [False, True])

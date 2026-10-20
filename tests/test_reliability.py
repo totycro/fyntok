@@ -40,6 +40,8 @@ class Advisor:
 @pytest.fixture
 def bank(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
     monkeypatch.setattr(categorization, "BATCH_SIZE", 1)
+    # These tests isolate serial recovery contracts; concurrent cases have their own fixture.
+    monkeypatch.setattr(categorization, "MAX_CONCURRENT_REQUESTS", 1)
     engine = open_database(tmp_path / "reliability.sqlite3")
     import_content(
         engine,
@@ -131,6 +133,7 @@ def test_process_death_recovers_only_uncommitted_batch(
 from fyntok.database import open_database, require_record
 from fyntok import categorization as c
 c.BATCH_SIZE = 1
+c.MAX_CONCURRENT_REQUESTS = 1
 class Crash:
     calls = 0
     def classify(self, model, payload):
