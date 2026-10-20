@@ -244,12 +244,12 @@ def cashflow_figure(
         )
     figure.update_layout(
         title="Annual trends" if yearly else "Monthly trends",
-        height=400,
+        height=440,
         barmode="group",
         yaxis_title=currency,
-        legend={"orientation": "h"},
+        legend={"orientation": "h", "x": 0, "xanchor": "left", "y": 1.02, "yanchor": "bottom"},
         xaxis={"type": "category"},
-        margin={"l": 55, "r": 20, "t": 60, "b": 80},
+        margin={"l": 55, "r": 20, "t": 100, "b": 80},
         hovermode="x unified",
     )
     return figure
