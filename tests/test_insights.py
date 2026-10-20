@@ -4,6 +4,8 @@ import asyncio
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
+from typing import Self, override
+from unittest.mock import patch
 
 import plotly.graph_objects as go
 import pytest
@@ -224,6 +226,37 @@ def test_figures_keep_gaps_and_annual_observed_totals(ledger: Engine) -> None:
     assert heatmap.data[0].z[0][3] is None
 
 
+@pytest.mark.parametrize(
+    ("today", "expected"),
+    [
+        (date(2024, 8, 20), "2024-07"),
+        (date(2024, 8, 1), "2024-07"),
+        (date(2025, 1, 1), "2024-08"),
+        (date(2024, 1, 20), "2024-08"),
+    ],
+)
+def test_overview_defaults_to_completed_month(
+    ledger: Engine, tmp_path: Path, today: date, expected: str
+) -> None:
+    class Calendar(date):
+        @classmethod
+        @override
+        def today(cls) -> Self:
+            return cls(today.year, today.month, today.day)
+
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(ledger, auth=ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            month = user.find("Overview month").elements.pop()
+            assert isinstance(month, ui.select)
+            assert month.value == expected
+
+    with patch("fyntok.analysis_ui.date", Calendar):
+        asyncio.run(scenario())
+
+
 def test_analysis_navigation_and_drilldown_preserve_state(ledger: Engine, tmp_path: Path) -> None:
     async def scenario() -> None:
         async with user_simulation(
@@ -320,20 +353,16 @@ def test_analysis_navigation_and_drilldown_preserve_state(ledger: Engine, tmp_pa
     asyncio.run(scenario())
 
 
-def test_empty_currency_filter_and_invalid_dates(ledger: Engine, tmp_path: Path) -> None:
+def test_empty_filter_results_and_invalid_dates(ledger: Engine, tmp_path: Path) -> None:
     async def scenario() -> None:
         async with user_simulation(
             lambda: build_page(ledger, auth=ChatGPTSession(tmp_path / "credentials"))
         ) as user:
             await user.open("/")
-            with user:
-                currency = user.find("Currency").elements.pop()
-                assert isinstance(currency, ui.select)
-                currency.set_value("EUR")
             user.find("Description contains").type("no such merchant")
             user.find("Apply filters").click()
             await user.should_see("0 matching transactions")
-            await user.should_see("No financial activity matches these filters in this period.")
+            await user.should_see("No matching history.")
             user.find("Clear").click()
             await user.should_see("16 matching transactions")
             user.find("Booking date from").type("2025-01-01")

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from .ai import AIClient, ResponsesClient
 from .analysis_ui import AnalysisState, build_analysis
 from .auth import ChatGPTSession
+from .date_ui import iso_date_input
 from .importer import import_content
 from .manual import (
     assignment_history,
@@ -25,7 +26,7 @@ from .manual import (
     save_category,
     undo_assignment,
 )
-from .models import Import, Transaction
+from .models import Import
 from .queries import Filters, example_rows, transaction_rows
 
 logger = logging.getLogger(__name__)
@@ -168,16 +169,9 @@ def build_page(
             "accept=.csv"
         ).classes("w-full")
     with ui.row().classes("items-end w-full"):
-        start = ui.input("Booking date from", placeholder="YYYY-MM-DD").props("type=date")
-        end = ui.input("Through", placeholder="YYYY-MM-DD").props("type=date")
+        start = iso_date_input("Booking date from")
+        end = iso_date_input("Through")
         category_filter = ui.select({}, label="Category", clearable=True).classes("w-48")
-        source = ui.select(
-            ["unassigned", "manual", "ai", "system", "undo"],
-            label="Assignment source",
-            clearable=True,
-        ).classes("w-44")
-        currency = ui.select([], label="Currency", clearable=True).classes("w-28")
-        merchant = ui.select([], label="Merchant", clearable=True, with_input=True).classes("w-64")
         search = ui.input("Description contains").classes("w-64")
 
         def apply_filters() -> None:
@@ -188,7 +182,7 @@ def build_page(
 
         def clear() -> None:
             logger.debug("Clear filters: resetting filters and refreshing results")
-            for control in (start, end, category_filter, source, currency, merchant, search):
+            for control in (start, end, category_filter, search):
                 control.value = None
             content.refresh()
 
@@ -199,9 +193,6 @@ def build_page(
             start=date.fromisoformat(start.value) if start.value else None,
             end=date.fromisoformat(end.value) if end.value else None,
             category_id=category_filter.value,
-            source=source.value,
-            currency=currency.value,
-            merchant=merchant.value,
             search=search.value or "",
         )
         f.validate()
@@ -217,19 +208,6 @@ def build_page(
         if category_filter.value not in category_filter.options:
             category_filter.value = None
         category_filter.update()
-        with Session(engine) as session:
-            merchant.options = list(
-                session.scalars(
-                    select(Transaction.merchant).distinct().order_by(Transaction.merchant)
-                )
-            )
-            currency.options = list(
-                session.scalars(
-                    select(Transaction.currency).distinct().order_by(Transaction.currency)
-                )
-            )
-        merchant.update()
-        currency.update()
         content.refresh()
 
     def perform(action: Callable[[], object], dialog: ui.dialog, label: str) -> None:

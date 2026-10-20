@@ -11,6 +11,7 @@ from sqlalchemy.engine import Engine
 
 from .analysis_plot import AnalysisPlot
 from .charts import breakdown_figure, cashflow_figure, spending_heatmap
+from .date_ui import iso_date_input
 from .insights import (
     Period,
     Report,
@@ -110,7 +111,9 @@ def build_analysis(
             if monthly:
                 available = months_in(Period(lower, upper))
                 if state.month not in available:
-                    state.month = available[-1]
+                    current_month = month_start(date.today()).isoformat()[:7]
+                    completed = [month for month in available if month < current_month]
+                    state.month = completed[-1] if completed else available[-1]
                 ui.select(
                     list(reversed(available)),
                     value=state.month,
@@ -138,16 +141,16 @@ def build_analysis(
                         state.custom_start = lower.isoformat()
                     if not state.custom_end:
                         state.custom_end = upper.isoformat()
-                    ui.input(
+                    iso_date_input(
                         "Analysis from",
                         value=state.custom_start,
                         on_change=lambda e: update("custom_start", e.value),
-                    ).props("type=date")
-                    ui.input(
+                    )
+                    iso_date_input(
                         "Analysis through",
                         value=state.custom_end,
                         on_change=lambda e: update("custom_end", e.value),
-                    ).props("type=date")
+                    )
                     try:
                         selected = Period(
                             date.fromisoformat(state.custom_start),
