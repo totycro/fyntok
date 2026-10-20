@@ -254,18 +254,25 @@ def test_numeric_table_columns(tmp_path: Path) -> None:
         ) as user:
             await user.open("/")
             tables = list(user.find(ui.table).elements)
-            assert len(tables) == 3
             for table in tables:
                 for column in table.columns:
                     name = column["name"]
-                    if name in {"incoming", "outgoing", "net", "amount"}:
+                    if name in {
+                        "incoming",
+                        "outgoing",
+                        "net",
+                        "amount",
+                        "spending",
+                        "average",
+                        "median",
+                    }:
                         assert column["field"] == f"{name}_cents"
                         assert ":format" in column
                     elif name.endswith("_count"):
                         assert column["field"] == name
                         assert ":format" in column
                     else:
-                        assert column["align"] == "left"
+                        assert column.get("align", "left") == "left"
                         continue
                     assert column["sortable"]
                     assert column["align"] == "right"
@@ -273,7 +280,7 @@ def test_numeric_table_columns(tmp_path: Path) -> None:
                     assert all(type(row[column["field"]]) is int for row in table.rows)
 
             transactions = next(
-                t for t in tables if t.row_key == "id" and "amount_cents" in t.rows[0]
+                t for t in tables if t.row_key == "id" and t.rows and "amount_cents" in t.rows[0]
             )
             assert sorted(row["amount_cents"] for row in transactions.rows) == [
                 -100001,
@@ -285,10 +292,10 @@ def test_numeric_table_columns(tmp_path: Path) -> None:
                 100001,
             ]
             summaries = next(t for t in tables if t.row_key == "key")
-            assert sorted(row["net_cents"] for row in summaries.rows) == sorted(
-                row["amount_cents"] for row in transactions.rows
-            )
-            imports = next(t for t in tables if "filename" in t.rows[0])
+            # Uncategorized money is exposed separately, not ranked as categorized spending.
+            assert summaries.rows == []
+            await user.should_see("Uncategorized · outgoing 1,012.01 EUR · incoming 1,012.01 EUR")
+            imports = next(t for t in tables if t.rows and "filename" in t.rows[0])
             assert {row["inserted_count"] for row in imports.rows} == {0, 7}
             assert {row["duplicate_count"] for row in imports.rows} == {0, 7}
 

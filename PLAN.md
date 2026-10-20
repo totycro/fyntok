@@ -15,7 +15,7 @@ The main workflow is to import several years of transactions, then repeatedly im
 
 - Import the existing headerless CSV, handling semicolon separators, CP1252 encoding, German dates, and decimal commas. The current file is at `data/data.csv`.
 - Preserve original transaction data, store amounts as integer cents. 
-- Show monthly category totals and transaction counts, category trends, merchant summaries, and a filterable transaction table. For now do not worry about refunds or reimbursements.
+- Provide a monthly overview and historical explorer with cash-flow summaries, category/merchant spending, typical monthly costs, period-change explanations, trends, and transaction drill-down. Keep transaction counts in supporting details. Preserve existing credit treatment; do not match refunds or reimbursements.
 - Use the first date column as booking date for monthly aggregation; retain both date columns.
 - Show outgoing spending as positive amounts, with income and uncategorized transactions separately. Exclude categorized internal transfers from all statistics while keeping them in the transaction list.
 - Calculate financial totals deterministically in SQL.
@@ -198,3 +198,12 @@ The subscription integration was reviewed on October 8, 2026. Verify current req
 - [ChatGPT plan usage overview](https://developers.openai.com/siwc/token-sharing-open-source)
 - [Supported models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
 - [Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+
+
+### Analysis redesign — Complete (October 20, 2026)
+
+- Replaced the count-led Analysis page with a monthly overview and historical explorer. Added income/spending/net cash flow, separate uncategorized inflows/outflows, ranked category/merchant spending and changes, average/median monthly costs, monthly/yearly trends, optional rolling averages, a category heatmap and monthly table, largest expenses, and recent-baseline comparisons.
+- Added report-preserving transaction dialogs and category/merchant spending trends. Existing shared filters constrain the selected period; comparison/baseline periods retain the same non-date filters. CLI aggregates, categorized-credit treatment, integer-cent totals, and transfer exclusion remain unchanged; no schema migration or external service was added.
+- Made currency selection explicit, flagged observed-history gaps and partial periods, excluded partial boundary months from typical-month statistics, and preserved gaps in monthly charts. Added a small Plotly component wrapper to skip invalid resize requests for hidden or initializing charts while preserving responsive resizing.
+- Validation: `just check` passed (Ruff, formatting, strict type checking, and 392 tests). Browser checks with synthetic multi-year history and many categories verified chart-driven category drill-down, currency switching, monthly/historical and monthly/yearly controls, tab changes, and a 390px viewport without horizontal page overflow or JavaScript errors. Private transaction data was not used for browser previews.
+- Recurring-payment detection, budgets, and net worth remain outside this release.

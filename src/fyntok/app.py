@@ -13,9 +13,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .ai import AIClient, ResponsesClient
-from .analysis import aggregate
+from .analysis_ui import AnalysisState, build_analysis
 from .auth import ChatGPTSession
-from .charts import monthly_figure, trend_figure
 from .importer import import_content
 from .manual import (
     assignment_history,
@@ -52,7 +51,7 @@ def columns(
         if n in money_columns:
             column["field"] = f"{n}_cents"
             column[":format"] = (
-                "value => (value < 0 ? '-' : '') + "
+                "value => value == null ? '—' : (value < 0 ? '-' : '') + "
                 "Math.floor(Math.abs(value) / 100).toLocaleString('en-US') + '.' + "
                 "String(Math.abs(value) % 100).padStart(2, '0')"
             )
@@ -421,6 +420,7 @@ def build_page(
         dialog.open()
 
     selected_tab = {"value": "Analysis"}
+    analysis_state = AnalysisState()
 
     def select_tab(event: events.ValueChangeEventArguments[Any]) -> None:
         logger.debug("Select tab: %s", event.value)
@@ -431,18 +431,19 @@ def build_page(
         try:
             f = filters()
             rows = transaction_rows(engine, f)
-            monthly = aggregate(engine, filters=f)
-            summaries = aggregate(engine, by="merchant", filters=f)
+            valid_filters = True
         except ValueError as exc:
             logger.exception("Refresh results failed: invalid filters (%s)", type(exc).__name__)
             ui.label(str(exc)).classes("text-red-700")
-            rows, monthly, summaries = [], [], []
+            rows = []
+            f = Filters()
+            valid_filters = False
         logger.debug("Refresh results: displaying %d matching transactions", len(rows))
-        ui.label(f"{len(rows):,} matching transactions in the transaction list").classes("text-xl")
+        ui.label(f"{len(rows):,} matching transactions in the transaction list").classes(
+            "text-sm text-gray-600"
+        )
         ui.label(
             "Internal transfers are excluded from statistics and remain in the transaction list. "
-            "Spending is positive; income and Uncategorized are separate. "
-            "Uncategorized shows signed net values. Currencies are separate series."
         )
         with ui.tabs(on_change=select_tab).classes("w-full") as tabs:
             dashboard = ui.tab("Analysis")
@@ -452,27 +453,8 @@ def build_page(
             imports = ui.tab("Import history")
         with ui.tab_panels(tabs, value=selected_tab["value"]).classes("w-full"):
             with ui.tab_panel(dashboard):
-                ui.plotly(monthly_figure(monthly)).classes("w-full")
-                ui.plotly(trend_figure(monthly)).classes("w-full")
-                ui.label("Merchant summaries").classes("text-xl")
-                display = [dict(r, key=i) for i, r in enumerate(summaries)]
-                ui.table(
-                    columns=columns(
-                        "merchant",
-                        "category_name",
-                        "bucket",
-                        "currency",
-                        "transaction_count",
-                        "outgoing",
-                        "incoming",
-                        "net",
-                        money_columns=("outgoing", "incoming", "net"),
-                        count_columns=("transaction_count",),
-                    ),
-                    rows=display,
-                    row_key="key",
-                    pagination=20,
-                ).classes("w-full")
+                if valid_filters:
+                    build_analysis(engine, f, analysis_state, transaction_editor, money, columns)
             with ui.tab_panel(transactions):
                 ui.label(
                     "Click a row to view its full description, correct that transaction, "
