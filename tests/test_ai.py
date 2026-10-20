@@ -127,13 +127,16 @@ def test_subscription_transport_requires_a_completed_stream(
     caplog.set_level("INFO", logger="fyntok.llm_traces")
     client = ResponsesClient(Login(), trace_dir=trace_dir if tracing else None)
     request_result = client.propose if operation == "propose" else client.classify
+    payload = (
+        {"categories": [], "descriptions": ["EXAMPLE GROCERY"]}
+        if operation == "propose"
+        else {"categories": [], "confirmed_examples": [], "transactions": []}
+    )
     if terminal == "response.completed":
-        assert (
-            request_result("selected-model", {"categories": [], "descriptions": ["EXAMPLE GROCERY"]}) == result
-        )
+        assert request_result("selected-model", payload) == result
     else:
         with pytest.raises(RuntimeError):
-            request_result("selected-model", {"categories": [], "descriptions": ["EXAMPLE GROCERY"]})
+            request_result("selected-model", payload)
     body = received[0]
     assert body["store"] is False and body["stream"] is True
     assert body["model"] == "selected-model" and isinstance(body["input"], list)

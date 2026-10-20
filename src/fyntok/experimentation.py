@@ -18,9 +18,15 @@ from typing import Any, Protocol
 
 import httpx
 
-from .ai import AMOUNT_INSTRUCTIONS, ResponsesClient, classification_schema
+from .ai import ResponsesClient
 from .auth import RESOURCE, ChatGPTSession
 from .categorization import relevant_examples, validate_assignments
+from .classification import (
+    AMOUNT_INSTRUCTIONS,
+    CLASSIFICATION_INSTRUCTIONS,
+    classification_schema,
+    named_classification,
+)
 from .descriptions import parse_description
 from .experiment_aggregation import aggregate_variants, missing_variants
 from .experiment_view import import_comparison_view, run_label
@@ -377,6 +383,7 @@ def evaluate(client: Requester, dataset: dict[str, Any], config: dict[str, Any])
     validate_transaction_context(dataset)
     validate_examples(dataset)
     categories = dataset["categories"]
+    name_only = config.get("category_format") == "name-only-v1"
     references = {c["id"]: c["name"] if config["category_names"] else c["id"] for c in categories}
     reverse = {reference: cid for cid, reference in references.items()}
     wire_categories = [{**c, "id": references[c["id"]]} for c in categories]
@@ -409,14 +416,17 @@ def evaluate(client: Requester, dataset: dict[str, Any], config: dict[str, Any])
             "transactions": targets,
         }
         try:
+            named = named_classification(payload, short_refs=False) if name_only else None
             output = client.request(
                 config["model"],
-                payload,
-                classification_schema(wire_categories),
-                INSTRUCTIONS,
+                named.payload if named else payload,
+                named.schema() if named else classification_schema(wire_categories),
+                CLASSIFICATION_INSTRUCTIONS if named else INSTRUCTIONS,
                 operation="experiment",
             )
-            assignments = validate_assignments(output, targets, wire_categories)
+            assignments = validate_assignments(
+                named.decode(output) if named else output, targets, wire_categories
+            )
         except (ValueError, RuntimeError, httpx.HTTPError) as error:
             errors.append(
                 {"batch": batch_number, "type": type(error).__name__, "message": str(error)}
@@ -500,7 +510,9 @@ class OfflineClient:
             "assignments": [
                 {
                     "transaction_id": t["transaction_id"],
-                    "category_id": payload["categories"][0]["id"],
+                    ("category_id" if "id" in payload["categories"][0] else "category_name"): (
+                        payload["categories"][0].get("id", payload["categories"][0]["name"])
+                    ),
                     "reason": "Offline integration response; not model evidence.",
                 }
                 for t in payload["transactions"]
@@ -567,6 +579,7 @@ def variants(models: tuple[str, ...] = MODELS) -> list[dict[str, Any]]:
         {
             "model": model,
             "category_names": True,
+            "category_format": "name-only-v1",
             "short_refs": True,
             "grouped": False,
             "booking_date": False,
@@ -646,7 +659,7 @@ def run_pilot(dataset_path: Path, output: Path, *, offline: bool = False) -> Non
                 f"{variant['model']}-names{int(variant['category_names'])}"
                 f"-short{int(variant['short_refs'])}-group{int(variant['grouped'])}"
                 f"-amount1-date{int(variant['booking_date'])}"
-                f"-r{repetition + 1}"
+                f"-{variant['category_format']}-r{repetition + 1}"
             )
             config = {
                 "description": f"{'OFFLINE smoke | ' if offline else ''}{run_label(key, variant)}",

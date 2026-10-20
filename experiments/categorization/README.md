@@ -134,6 +134,17 @@ configuration with three repetitions:
 
 - **Amount:** cleaned description and signed integer `amount_cents`.
 
+The current configuration records `category_format: name-only-v1` in saved
+metadata and includes it in run filenames to distinguish it from earlier runs.
+Category objects contain only `name`, `definition`, and `kind`; they have no `id`.
+Confirmed examples and model responses use `category_name`, with exact saved
+names enforced by the output schema and local validation. Predictions are mapped
+back to stable category IDs for scoring and storage. Dataset files retain IDs.
+The prompt, schema, and reference conversion are shared with production; production
+retrieves examples per batch, while this benchmark fixes examples for the full sample.
+Historical configurations without this format marker retain their previous ID-field
+requests, and historical reports and saved request traces remain readable.
+
 Requests use category names, short transaction references (`t1`, `t2`, ...), and
 individual rows, even when descriptions repeat. Positive amounts mean incoming;
 negative amounts mean outgoing. Positive amounts default to a suitable saved income
@@ -236,6 +247,16 @@ and predictions, creates a fresh comparison, and leaves earlier evaluations and
 source artifacts available. Offline comparisons are labeled **OFFLINE smoke**.
 Repetitions are not independent samples; this small diagnostic pilot should guide
 a larger held-out evaluation before changing production behavior.
+
+The latest retained live pilot, dated October 15, 2026, scored 41/41 correct
+in each of three repetitions, with full coverage and consistency. It supplied
+nine existing confirmed examples plus three explicitly reviewed teaching examples.
+The preceding pilot with nine examples averaged 91.9% accuracy. These results
+used the earlier wire format with redundant category `id` and `name` fields;
+they are not live validation of `name-only-v1`. This small diagnostic sample does
+not establish full-history accuracy. Benchmark teaching examples are not imported
+into production automatically. The new format has offline validation; a future
+live run can measure whether removing redundant fields affects accuracy.
 
 To extend the experiment, add explicit factors to the Python matrix and provider
 while retaining stable datasets and canonical output IDs. Follow-up suites can

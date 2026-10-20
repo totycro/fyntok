@@ -100,8 +100,8 @@ def test_review_examples_are_inputs_and_never_scored(
     result = evaluate(Client(), dataset, config)
     assert len(captured) == 1
     assert captured[0]["confirmed_examples"] == [
-        {"example_id": "row-0", "description": "Example insurer", "category_id": "Shopping"},
-        {"example_id": "old", "description": "Old merchant", "category_id": "Food"},
+        {"example_id": "row-0", "description": "Example insurer", "category_name": "Shopping"},
+        {"example_id": "old", "description": "Old merchant", "category_name": "Food"},
     ]
     assert [t["description"] for t in captured[0]["transactions"]] == ["Market", "Bakery"]
     assert all(

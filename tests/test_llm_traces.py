@@ -229,7 +229,7 @@ def test_classification_traces_include_run_batches_and_proposals_have_no_run_con
                 "assignments": [
                     {
                         "transaction_id": t["transaction_id"],
-                        "category_id": "uncategorized",
+                        "category_name": "Uncategorized",
                         "reason": "Mock result",
                     }
                     for t in payload["transactions"]

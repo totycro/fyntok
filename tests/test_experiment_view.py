@@ -7,12 +7,21 @@ from typing import Any
 import pytest
 
 from fyntok.experiment_view import comparison_export, run_label
-from fyntok.experimentation import OfflineClient, evaluate, variants, write_json
+from fyntok.experimentation import OfflineClient, evaluate, write_json
 
 
 def legacy_variants() -> list[dict[str, Any]]:
     """Frozen historical configurations remain readable after the matrix changes."""
-    return [{**variants(("mock",))[0], "booking_date": enabled} for enabled in (False, True)]
+    return [
+        {
+            "model": "mock",
+            "category_names": True,
+            "short_refs": True,
+            "grouped": False,
+            "booking_date": enabled,
+        }
+        for enabled in (False, True)
+    ]
 
 
 @pytest.fixture

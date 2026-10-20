@@ -98,7 +98,7 @@ def test_variants_keep_duplicates_separate_and_omit_booking_date(
         assert "reviewer" not in payload
         expected_ref = "t1" if config["short_refs"] else "row-1"
         assert payload["transactions"][0]["transaction_id"] == expected_ref
-        assert payload["confirmed_examples"][0]["category_id"] == (
+        assert payload["confirmed_examples"][0]["category_name"] == (
             "Food" if config["category_names"] else "c-food"
         )
         example_ids = [e["example_id"] for e in payload["confirmed_examples"]]
@@ -129,7 +129,7 @@ def test_failed_batches_count_against_accuracy(sample: dict[str, Any], failure: 
                 case "duplicate":
                     output["assignments"][1] = output["assignments"][0]
                 case "unknown":
-                    output["assignments"][0]["category_id"] = "invented"
+                    output["assignments"][0]["category_name"] = "invented"
             return output
 
     result = evaluate(BadClient(), sample, variants(("mock",))[0])
