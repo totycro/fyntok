@@ -225,8 +225,11 @@ def build_analysis(
             .props('role="group" aria-label="Selected analysis context"')
             .mark("analysis-context")
         ):
-            ui.label(period_label).classes("text-lg font-semibold text-blue-900").props(
-                f'title="Selected period: {selected.start} through {selected.end}"'
+            (
+                ui.label(period_label)
+                .classes("text-lg font-semibold text-blue-900")
+                .style("text-wrap: balance")
+                .props(f'title="Selected period: {selected.start} through {selected.end}"')
             )
             ui.label(f"{state.view} · {chosen}").classes("text-sm text-gray-700")
         partial = selected.start < first or selected.end > last or selected.end > date.today()
