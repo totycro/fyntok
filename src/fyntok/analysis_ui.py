@@ -274,8 +274,24 @@ def build_analysis(
                     )
                     detail_report = build_report(engine, selection, Period(detail_start, end))
                     ui.label(f"Spending trend · {detail_start} through {end}").classes("text-sm")
+                    if detail_report.average_cents is not None:
+                        ui.label(
+                            "Average monthly spending · "
+                            f"{money(detail_report.average_cents)} {chosen} · "
+                            f"{len(detail_report.eligible_months)} eligible months"
+                        ).classes("font-medium")
+                    else:
+                        ui.label(
+                            "Insufficient history for average monthly spending: "
+                            "no full interior months with recorded activity."
+                        ).classes("text-sm text-gray-600")
                     AnalysisPlot(
-                        cashflow_figure(detail_report.series, chosen, spending_only=True)
+                        cashflow_figure(
+                            detail_report.series,
+                            chosen,
+                            spending_only=True,
+                            average_cents=detail_report.average_cents,
+                        )
                     ).classes("w-full")
                 table = (
                     ui.table(

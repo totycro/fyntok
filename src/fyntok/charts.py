@@ -133,6 +133,7 @@ def cashflow_figure(
     rolling: bool = False,
     spending_only: bool = False,
     categories: list[dict[str, Any]] | None = None,
+    average_cents: int | None = None,
 ) -> go.Figure:
     from calendar import monthrange
     from datetime import date
@@ -152,7 +153,9 @@ def cashflow_figure(
             }
         )
     figure = go.Figure()
-    if not any(row["incoming_cents"] or row["outgoing_cents"] for row in series):
+    if average_cents is None and not any(
+        row["incoming_cents"] or row["outgoing_cents"] for row in series
+    ):
         return figure
     if bool(categories):
         for category in categories:
@@ -230,6 +233,14 @@ def cashflow_figure(
                 connectgaps=False,
                 customdata=metadata,
             )
+        )
+    if average_cents is not None:
+        figure.add_hline(
+            y=average_cents / 100,
+            line_color="#ea580c",
+            line_dash="dash",
+            name="Average monthly spending",
+            showlegend=True,
         )
     figure.update_layout(
         title="Annual trends" if yearly else "Monthly trends",

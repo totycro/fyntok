@@ -227,6 +227,92 @@ def test_figures_keep_gaps_and_annual_observed_totals(ledger: Engine) -> None:
 
 
 @pytest.mark.parametrize(
+    ("start", "end", "expected"),
+    [
+        (date(2024, 1, 1), date(2024, 8, 31), 1000),
+        (date(2024, 3, 16), date(2024, 7, 31), 0),
+        (date(2024, 1, 1), date(2024, 1, 31), None),
+    ],
+)
+def test_monthly_average_line_uses_filtered_eligible_months(
+    ledger: Engine, start: date, end: date, expected: int | None
+) -> None:
+    report = build_report(ledger, Filters(currency="EUR", merchant="Food Mar"), Period(start, end))
+    assert report.average_cents == expected
+    figure = cashflow_figure(
+        report.series, "EUR", spending_only=True, average_cents=report.average_cents
+    )
+    if expected is None:
+        assert not figure.layout.shapes
+    else:
+        (line,) = figure.layout.shapes
+        assert line.y0 == line.y1 == expected / 100
+        assert line.line.dash == "dash"
+        assert line.name == "Average monthly spending"
+        assert line.showlegend
+    assert not cashflow_figure(report.series, "EUR").layout.shapes
+
+
+@pytest.mark.parametrize(
+    ("month", "grouping", "name", "message", "expected"),
+    [
+        ("2024-03", "Categories", "Travel", "15.00 EUR · 2 eligible months", 15),
+        ("2024-03", "Merchants", "Food Mar", "25.00 EUR · 2 eligible months", 25),
+        ("2024-01", "Categories", "Food", "Insufficient history for average monthly", None),
+    ],
+)
+def test_drilldown_monthly_average(
+    ledger: Engine,
+    tmp_path: Path,
+    month: str,
+    grouping: str,
+    name: str,
+    message: str,
+    expected: int | None,
+) -> None:
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(ledger, auth=ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            month_select = user.find("Overview month").elements.pop()
+            breakdown_toggle = user.find(marker="analysis-breakdown").elements.pop()
+            assert isinstance(month_select, ui.select)
+            assert isinstance(breakdown_toggle, ui.toggle)
+            with user:
+                month_select.set_value(month)
+                breakdown_toggle.set_value(grouping)
+            await asyncio.sleep(0.05)  # NiceGUI schedules refreshes in the background.
+            breakdown = user.find(marker="analysis-breakdown-table").elements.pop()
+            assert isinstance(breakdown, ui.table)
+            row = next(row for row in breakdown.rows if row["name"] == name)
+            with user:
+                assert user.client is not None
+                listener = next(
+                    listener
+                    for listener in breakdown._event_listeners.values()
+                    if listener.type == "rowClick"
+                )
+                events.handle_event(
+                    listener.handler,
+                    events.GenericEventArguments(
+                        sender=breakdown, client=user.client, args=[{}, row, 0]
+                    ),
+                )
+            await user.should_see(message)
+            dialog = next(d for d in user.find(ui.dialog).elements if d.value)
+            plot = next(p for p in dialog.descendants() if isinstance(p, ui.plotly))
+            assert isinstance(plot.figure, go.Figure)
+            if expected is None:
+                assert not plot.figure.layout.shapes
+            else:
+                (line,) = plot.figure.layout.shapes
+                assert line.y0 == line.y1 == expected
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
     ("today", "expected"),
     [
         (date(2024, 8, 20), "2024-07"),
