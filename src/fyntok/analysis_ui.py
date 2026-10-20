@@ -169,12 +169,13 @@ def build_analysis(
                     label="Trend grouping",
                     on_change=lambda e: update("grouping", e.value),
                 ).classes("w-40")
-            ui.select(
-                ["Previous period", "Same period last year"],
-                value=state.comparison,
-                label="Compare with",
-                on_change=lambda e: update("comparison", e.value),
-            ).classes("w-56")
+            if not monthly:
+                ui.select(
+                    ["Previous period", "Same period last year"],
+                    value=state.comparison,
+                    label="Compare with",
+                    on_change=lambda e: update("comparison", e.value),
+                ).classes("w-56")
         # Global date filters constrain the period, but observed boundary dates do not
         # truncate it: an incomplete month must not look like a complete short period.
         selected_start = max(selected.start, filters.start or selected.start)
@@ -198,8 +199,8 @@ def build_analysis(
         if partial or selected.start.day != 1 or selected.end != month_period(selected.end).end:
             ui.label(
                 "Partial period: recorded history or date filters do not span "
-                "full calendar months. "
-                "Comparison totals are not adjusted for missing days."
+                "full calendar months."
+                + (" Comparison totals are not adjusted for missing days." if not monthly else "")
             ).classes("text-amber-800 text-sm")
         missing = [row["month"] for row in report.series if not row["observed"]]
         if missing:
@@ -344,7 +345,8 @@ def build_analysis(
         ui.button("View report transactions", on_click=lambda: drill()).props("outline").mark(
             "analysis-drill"
         )
-        render_changes(report, chosen, money, columns, drill, state.breakdown == "Merchants")
+        if not monthly:
+            render_changes(report, chosen, money, columns, drill, state.breakdown == "Merchants")
 
         if monthly:
             trend_period = Period(

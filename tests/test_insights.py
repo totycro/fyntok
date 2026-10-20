@@ -231,6 +231,8 @@ def test_analysis_navigation_and_drilldown_preserve_state(ledger: Engine, tmp_pa
         ) as user:
             await user.open("/")
             await user.should_see("40.00 EUR")
+            await user.should_not_see("What changed?")
+            await user.should_not_see("Compare with")
             month = user.find("Overview month").elements.pop()
             assert isinstance(month, ui.select)
             with user:
@@ -273,6 +275,8 @@ def test_analysis_navigation_and_drilldown_preserve_state(ledger: Engine, tmp_pa
             with user:
                 view.set_value("Historical explorer")
             await user.should_see("average 34.00 EUR")
+            await user.should_see("What changed?")
+            await user.should_see("Compare with")
             await user.should_see(marker="analysis-month-table")
             grouping = user.find("Trend grouping").elements.pop()
             assert isinstance(grouping, ui.select)
