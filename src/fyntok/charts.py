@@ -1,6 +1,7 @@
 """Plot only SQL-derived totals; currency series are always separate."""
 
 from collections import defaultdict
+from math import floor, log10
 from typing import Any
 
 import plotly.graph_objects as go
@@ -259,30 +260,55 @@ def spending_heatmap(rows: list[dict[str, Any]], months: list[str], currency: st
     figure = go.Figure()
     displayed = rows[:30]
     if displayed:
+        amounts = [
+            [
+                row["monthly_cents"][month] / 100
+                if row["monthly_cents"][month] is not None
+                else None
+                for month in months
+            ]
+            for row in displayed
+        ]
+        maximum = max(
+            (amount for row in amounts for amount in row if amount is not None), default=0
+        )
+        ticks = [0.0]
+        if maximum >= 1:
+            ticks.extend(10.0**exponent for exponent in range(floor(log10(maximum)) + 1))
+        elif maximum > 0:
+            ticks.append(maximum)
         figure.add_trace(
             go.Heatmap(
                 x=months,
                 y=[row["name"] for row in displayed],
                 z=[
-                    [
-                        row["monthly_cents"][month] / 100
-                        if row["monthly_cents"][month] is not None
-                        else None
-                        for month in months
-                    ]
-                    for row in displayed
+                    [log10(1 + amount) if amount is not None else None for amount in row]
+                    for row in amounts
                 ],
+                zmin=0,
+                zmax=log10(1 + maximum) if maximum > 0 else 1,
                 customdata=[
                     [
-                        {"category_id": row["key"], "start": f"{month}-01", "month": month}
-                        for month in months
+                        {
+                            "category_id": row["key"],
+                            "start": f"{month}-01",
+                            "month": month,
+                            "amount": amount,
+                        }
+                        for month, amount in zip(months, monthly_amounts, strict=True)
                     ]
-                    for row in displayed
+                    for row, monthly_amounts in zip(displayed, amounts, strict=True)
                 ],
                 colorscale="Blues",
                 hoverongaps=False,
-                hovertemplate="%{y} · %{x}: %{z:,.2f} " + currency + "<extra></extra>",
-                colorbar={"title": currency},
+                hovertemplate=(
+                    "%{y} · %{x}: %{customdata.amount:,.2f} " + currency + "<extra></extra>"
+                ),
+                colorbar={
+                    "title": f"{currency} · log scale",
+                    "tickvals": [log10(1 + amount) for amount in ticks],
+                    "ticktext": [f"{amount:,.2f}" for amount in ticks],
+                },
             )
         )
     figure.update_layout(
