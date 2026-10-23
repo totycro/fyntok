@@ -420,9 +420,6 @@ def build_page(
         ui.label(f"{len(rows):,} matching transactions in the transaction list").classes(
             "text-sm text-gray-600"
         )
-        ui.label(
-            "Internal transfers are excluded from statistics and remain in the transaction list. "
-        )
         with ui.tabs(on_change=select_tab).classes("w-full") as tabs:
             dashboard = ui.tab("Analysis")
             transactions = ui.tab("Transactions")

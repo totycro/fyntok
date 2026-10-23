@@ -115,7 +115,6 @@ def test_internal_transfers_remain_in_table_but_not_statistics(tmp_path: Path) -
         ) as user:
             await user.open("/")
             await user.should_see("1 matching transactions in the transaction list")
-            await user.should_see("Internal transfers are excluded from statistics")
             for plot in user.find(ui.plotly).elements:
                 assert isinstance(plot.figure, go.Figure)
                 assert not plot.figure.data
