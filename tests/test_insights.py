@@ -14,10 +14,11 @@ from nicegui.testing.user_simulation import user_simulation
 from sqlalchemy.engine import Engine
 
 from fyntok.analysis import aggregate
+from fyntok.analysis_plot import AnalysisPlot
 from fyntok.analysis_ui import AnalysisState, build_analysis
 from fyntok.app import build_page, columns, money
 from fyntok.auth import ChatGPTSession
-from fyntok.charts import breakdown_figure, cashflow_figure, spending_heatmap
+from fyntok.charts import breakdown_figure, cashflow_figure, category_color, spending_heatmap
 from fyntok.database import open_database
 from fyntok.importer import import_content
 from fyntok.insights import (
@@ -322,7 +323,7 @@ def test_drilldown_monthly_average(
         (date(2024, 1, 20), "2024-08"),
     ],
 )
-def test_overview_defaults_to_completed_month(
+def test_analysis_monthly_view_defaults_to_completed_month(
     ledger: Engine, tmp_path: Path, today: date, expected: str
 ) -> None:
     class Calendar(date):
@@ -527,13 +528,274 @@ def test_empty_filter_results_and_invalid_dates(ledger: Engine, tmp_path: Path) 
             user.find("Description contains").type("no such merchant")
             user.find("Apply filters").click()
             await user.should_see("0 matching transactions")
-            await user.should_see("No matching history.")
-            user.find("Clear").click()
+            await user.should_see(marker="analysis-spending_cents")
+            await user.should_see(marker="overview-spending_cents")
+            user.find(marker="clear-transaction-filters").click()
             await user.should_see("16 matching transactions")
             user.find("Booking date from").type("2025-01-01")
             user.find("Through").type("2024-01-01")
             user.find("Apply filters").click()
             await user.should_see("Start date must be before the end date.")
-            await user.should_not_see(marker="analysis-spending_cents")
+            await user.should_see(marker="analysis-spending_cents")
+            await user.should_see(marker="overview-spending_cents")
+
+    asyncio.run(scenario())
+
+
+def test_simple_overview_month_currency_and_category_totals(ledger: Engine, tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(ledger, auth=ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            assert any(panel.value == "Overview" for panel in user.find(ui.tab_panels).elements)
+            month = user.find(marker="overview-month").elements.pop()
+            assert isinstance(month, ui.select)
+            assert month.value == "2024-08"
+            assert month.options == [f"2024-{number:02}" for number in range(8, 0, -1)]
+            await user.should_see("Partial month:")
+            with user:
+                month.set_value("2024-03")
+            await user.should_see("March 2024 · EUR")
+            spending = user.find(marker="overview-spending_cents").elements.pop()
+            income = user.find(marker="overview-income_cents").elements.pop()
+            assert isinstance(spending, ui.label)
+            assert isinstance(income, ui.label)
+            assert spending.text == "70.00 EUR"
+            assert income.text == "110.00 EUR"
+            plot = user.find(marker="overview-category-chart").elements.pop()
+            assert isinstance(plot, AnalysisPlot)
+            assert isinstance(plot.figure, go.Figure)
+            trace = plot.figure.data[0]
+            assert isinstance(trace, go.Bar)
+            assert list(zip(trace.y, trace.x, strict=True)) == [("Travel", 20), ("Food", 50)]
+            await user.should_not_see(marker="overview-categories")
+            await user.should_see("Uncategorized · outgoing 3.00 EUR · incoming 2.00 EUR")
+            month = user.find(marker="overview-month").elements.pop()
+            assert isinstance(month, ui.select)
+            with user:
+                month.set_value("2024-04")
+            await user.should_see("No recorded activity this month.")
+            await user.should_not_see(marker="overview-category-chart")
+            currency = user.find(marker="overview-currency").elements.pop()
+            assert isinstance(currency, ui.select)
+            with user:
+                currency.set_value("USD")
+            await user.should_see("March 2024 · USD")
+            spending = user.find(marker="overview-spending_cents").elements.pop()
+            assert isinstance(spending, ui.label)
+            assert spending.text == "100.00 USD"
+            month = user.find(marker="overview-month").elements.pop()
+            assert isinstance(month, ui.select)
+            assert month.value == "2024-03"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("currency, expected_cents", [("EUR", 5000), ("USD", 10000)])
+def test_overview_category_drilldown(
+    ledger: Engine, tmp_path: Path, currency: str, expected_cents: int
+) -> None:
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(ledger, auth=ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            month = user.find(marker="overview-month").elements.pop()
+            assert isinstance(month, ui.select)
+            with user:
+                month.set_value("2024-03")
+            await user.should_see("March 2024 · EUR")
+            currency_select = user.find(marker="overview-currency").elements.pop()
+            assert isinstance(currency_select, ui.select)
+            with user:
+                currency_select.set_value(currency)
+            await user.should_see(f"March 2024 · {currency}")
+            plot = user.find(marker="overview-category-chart").elements.pop()
+            assert isinstance(plot, AnalysisPlot)
+            report = build_report(
+                ledger, Filters(currency=currency), Period(date(2024, 3, 1), date(2024, 3, 31))
+            )
+            food = next(row for row in report.categories if row["name"] == "Food")
+            figure = plot.figure
+            assert isinstance(figure, go.Figure)
+            trace = figure.data[0]
+            assert isinstance(trace, go.Bar)
+            assert list(trace.x) == [
+                row["spending_cents"] / 100 for row in reversed(report.categories)
+            ]
+            assert list(trace.marker.color) == [
+                category_color(row["key"]) for row in reversed(report.categories)
+            ]
+            args = {"points": [{"customdata": {"category_id": food["key"]}}]}
+            with user:
+                assert user.client is not None
+                listener = next(
+                    item for item in plot._event_listeners.values() if item.type == "plotly_click"
+                )
+                events.handle_event(
+                    listener.handler,
+                    events.GenericEventArguments(sender=plot, client=user.client, args=args),
+                )
+            await user.should_see("Category: Food")
+            transactions = user.find(marker="overview-transactions").elements.pop()
+            assert isinstance(transactions, ui.table)
+            assert len(transactions.rows) == 1
+            assert -sum(row["amount_cents"] for row in transactions.rows) == expected_cents
+            assert {row["currency"] for row in transactions.rows} == {currency}
+            assert all(row["booking_date"].startswith("2024-03-") for row in transactions.rows)
+            dialog = next(item for item in user.find(ui.dialog).elements if item.value)
+            user.find("Back to overview").click()
+            assert not dialog.value
+            # User simulation has no browser to emit Quasar's completed hide transition.
+            with user:
+                hide_listener = next(
+                    item for item in dialog._event_listeners.values() if item.type == "hide"
+                )
+                events.handle_event(
+                    hide_listener.handler,
+                    events.GenericEventArguments(sender=dialog, client=user.client, args={}),
+                )
+            await user.should_not_see(marker="overview-transactions")
+            selected_month = user.find(marker="overview-month").elements.pop()
+            selected_currency = user.find(marker="overview-currency").elements.pop()
+            assert isinstance(selected_month, ui.select)
+            assert isinstance(selected_currency, ui.select)
+            assert selected_month.value == "2024-03"
+            assert selected_currency.value == currency
+            with user:
+                events.handle_event(
+                    listener.handler,
+                    events.GenericEventArguments(sender=plot, client=user.client, args=args),
+                )
+            transactions = user.find(marker="overview-transactions").elements.pop()
+            assert isinstance(transactions, ui.table)
+            with user:
+                row_listener = next(
+                    item
+                    for item in transactions._event_listeners.values()
+                    if item.type == "rowClick"
+                )
+                events.handle_event(
+                    row_listener.handler,
+                    events.GenericEventArguments(
+                        sender=transactions,
+                        client=user.client,
+                        args=[{}, transactions.rows[0], 0],
+                    ),
+                )
+            await user.should_see("Transaction details")
+
+    asyncio.run(scenario())
+
+
+def test_overview_chart_limits_categories(ledger: Engine, tmp_path: Path) -> None:
+    content = "".join(f"a;Extra {number};15.03.2024;15.03.2024;-0,01;EUR\n" for number in range(21))
+    import_content(ledger, content.encode(), "extra-categories.csv")
+    for row in transaction_rows(ledger, Filters(search="Extra")):
+        category_id = save_category(ledger, row["description"], "Extra spending", "spending")
+        correct_transaction(ledger, row["id"], category_id)
+
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(ledger, auth=ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            month = user.find(marker="overview-month").elements.pop()
+            assert isinstance(month, ui.select)
+            with user:
+                month.set_value("2024-03")
+            await user.should_see("March 2024 · EUR")
+            plot = user.find(marker="overview-category-chart").elements.pop()
+            assert isinstance(plot, AnalysisPlot)
+            assert isinstance(plot.figure, go.Figure)
+            trace = plot.figure.data[0]
+            assert isinstance(trace, go.Bar)
+            assert len(trace.customdata) == 20
+            assert (
+                len(
+                    build_report(
+                        ledger, Filters(currency="EUR"), month_period(date(2024, 3, 1))
+                    ).categories
+                )
+                == 23
+            )
+            await user.should_not_see(marker="overview-categories")
+
+    asyncio.run(scenario())
+
+
+def test_tab_filters_periods_and_selections_are_independent(ledger: Engine, tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(ledger, auth=ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            month = user.find(marker="overview-month").elements.pop()
+            assert isinstance(month, ui.select)
+            with user:
+                month.set_value("2024-03")
+            await user.should_see("March 2024 · EUR")
+            user.find(kind=ui.tab, content="Transactions").click()
+            user.find("Booking date from").type("2024-03-19")
+            user.find("Through").type("2024-03-20")
+            user.find("Apply filters").click()
+            await user.should_see("2 matching transactions")
+            user.find(kind=ui.tab, content="Analysis").click()
+            month = user.find("Overview month").elements.pop()
+            assert isinstance(month, ui.select)
+            with user:
+                month.set_value("2024-03")
+            await user.should_see(marker="analysis-spending_cents", content="70.00 EUR")
+            user.find("Analysis description contains").type("Food")
+            user.find("Apply analysis filters").click()
+            await user.should_see(marker="analysis-spending_cents", content="50.00 EUR")
+            spending = user.find(marker="analysis-spending_cents").elements.pop()
+            assert isinstance(spending, ui.label)
+            assert spending.text == "50.00 EUR"
+            context = user.find(marker="analysis-context").elements.pop()
+            assert (
+                next(e.text for e in context.descendants() if isinstance(e, ui.label))
+                == "March 2024"
+            )
+            view = user.find(marker="analysis-view").elements.pop()
+            assert isinstance(view, ui.toggle)
+            with user:
+                view.set_value("Historical explorer")
+            await user.should_see("History period")
+            history = user.find("History period").elements.pop()
+            assert isinstance(history, ui.select)
+            user.find(marker="analysis-context").elements.pop().mark("old-period")
+            with user:
+                history.set_value("2024")
+            await user.should_not_see(marker="old-period")
+            context = user.find(marker="analysis-context").elements.pop()
+            assert next(e.text for e in context.descendants() if isinstance(e, ui.label)) == "2024"
+            user.find(kind=ui.tab, content="Transactions").click()
+            user.find("Description contains").type("Unknown")
+            user.find("Apply filters").click()
+            await user.should_see("1 matching transactions")
+            # A refresh in another tab preserves both overview and analysis controls.
+            user.find(kind=ui.tab, content="Overview").click()
+            spending = user.find(marker="overview-spending_cents").elements.pop()
+            assert isinstance(spending, ui.label)
+            assert spending.text == "70.00 EUR"
+            user.find(kind=ui.tab, content="Analysis").click()
+            history = user.find("History period").elements.pop()
+            assert isinstance(history, ui.select)
+            assert history.value == "2024"
+            user.find("Clear analysis filters").click()
+            await user.should_see("Historical explorer · EUR")
+            user.find("Analysis description contains").type("No matching description")
+            user.find("Apply analysis filters").click()
+            await user.should_see("No matching history.")
+            user.find(kind=ui.tab, content="Transactions").click()
+            user.find("Booking date from").clear().type("2025-01-01")
+            user.find("Apply filters").click()
+            await user.should_see("Start date must be before the end date.")
+            user.find(kind=ui.tab, content="Overview").click()
+            spending = user.find(marker="overview-spending_cents").elements.pop()
+            assert isinstance(spending, ui.label)
+            assert spending.text == "70.00 EUR"
 
     asyncio.run(scenario())

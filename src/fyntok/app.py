@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from .manual import (
     undo_assignment,
 )
 from .models import Import
+from .overview_ui import OverviewState, build_overview
 from .queries import Filters, example_rows, transaction_rows
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,38 @@ def columns(
             )
         result.append(column)
     return result
+
+
+@dataclass
+class FilterState:
+    """Draft controls and the last applied selection belong to one tab."""
+
+    start: str = ""
+    end: str = ""
+    category_id: str | None = None
+    search: str = ""
+    applied: Filters = field(default_factory=Filters)
+    error: str = ""
+
+    def apply(self) -> None:
+        try:
+            selected = Filters(
+                start=date.fromisoformat(self.start) if self.start else None,
+                end=date.fromisoformat(self.end) if self.end else None,
+                category_id=self.category_id,
+                search=self.search,
+            )
+            selected.validate()
+        except ValueError as exc:
+            self.error = str(exc)
+        else:
+            self.applied = selected
+            self.error = ""
+
+    def filters(self) -> Filters:
+        if self.error:
+            raise ValueError(self.error)
+        return self.applied
 
 
 def build_page(
@@ -168,35 +202,57 @@ def build_page(
         ui.upload(on_upload=upload, auto_upload=True, label="Choose bank export").props(
             "accept=.csv"
         ).classes("w-full")
-    with ui.row().classes("items-end w-full"):
-        start = iso_date_input("Booking date from")
-        end = iso_date_input("Through")
-        category_filter = ui.select({}, label="Category", clearable=True).classes("w-48")
-        search = ui.input("Description contains").classes("w-64")
+    transaction_filters = FilterState()
+    analysis_filters = FilterState()
 
-        def apply_filters() -> None:
-            logger.debug("Apply filters: refreshing analysis and transactions")
-            content.refresh()
+    def filter_controls(state: FilterState, *, analysis: bool = False) -> None:
+        with ui.row().classes("items-end w-full"):
+            if not analysis:
+                iso_date_input(
+                    "Booking date from",
+                    value=state.start,
+                    on_change=lambda e: setattr(state, "start", e.value or ""),
+                )
+                iso_date_input(
+                    "Through",
+                    value=state.end,
+                    on_change=lambda e: setattr(state, "end", e.value or ""),
+                )
+            ui.select(
+                {c["id"]: c["name"] for c in categories(engine)},
+                label="Analysis category" if analysis else "Category",
+                clearable=True,
+                value=state.category_id,
+                on_change=lambda e: setattr(state, "category_id", e.value),
+            ).classes("w-48")
+            ui.input(
+                "Analysis description contains" if analysis else "Description contains",
+                value=state.search,
+                on_change=lambda e: setattr(state, "search", e.value or ""),
+            ).classes("w-64")
 
-        ui.button("Apply filters", on_click=apply_filters)
+            def apply_filters() -> None:
+                logger.debug(
+                    "Apply filters: refreshing %s", "analysis" if analysis else "transactions"
+                )
+                state.apply()
+                content.refresh()
 
-        def clear() -> None:
-            logger.debug("Clear filters: resetting filters and refreshing results")
-            for control in (start, end, category_filter, search):
-                control.value = None
-            content.refresh()
+            def clear() -> None:
+                logger.debug("Clear filters: resetting local filters and refreshing results")
+                state.start = state.end = state.search = ""
+                state.category_id = None
+                state.apply()
+                content.refresh()
 
-        ui.button("Clear", on_click=clear).props("flat")
-
-    def filters() -> Filters:
-        f = Filters(
-            start=date.fromisoformat(start.value) if start.value else None,
-            end=date.fromisoformat(end.value) if end.value else None,
-            category_id=category_filter.value,
-            search=search.value or "",
-        )
-        f.validate()
-        return f
+            ui.button(
+                "Apply analysis filters" if analysis else "Apply filters", on_click=apply_filters
+            )
+            ui.button("Clear analysis filters" if analysis else "Clear", on_click=clear).props(
+                "flat"
+            ).mark("clear-analysis-filters" if analysis else "clear-transaction-filters")
+        if state.error:
+            ui.label(state.error).classes("text-red-700")
 
     from .ai_ui import build_ai_panel
 
@@ -204,10 +260,12 @@ def build_page(
     ai_client = ai_client or ResponsesClient(auth)
 
     def refresh() -> None:
-        category_filter.options = {c["id"]: c["name"] for c in categories(engine)}
-        if category_filter.value not in category_filter.options:
-            category_filter.value = None
-        category_filter.update()
+        category_ids = {c["id"] for c in categories(engine)}
+        for state in (transaction_filters, analysis_filters):
+            if state.category_id not in category_ids:
+                state.category_id = None
+            if state.applied.category_id not in category_ids:
+                state.applied = replace(state.applied, category_id=None)
         content.refresh()
 
     def perform(action: Callable[[], object], dialog: ui.dialog, label: str) -> None:
@@ -397,7 +455,8 @@ def build_page(
         dialog.on("hide", dialog.delete)
         dialog.open()
 
-    selected_tab = {"value": "Analysis"}
+    selected_tab = {"value": "Overview"}
+    overview_state = OverviewState()
     analysis_state = AnalysisState()
 
     def select_tab(event: events.ValueChangeEventArguments[Any]) -> None:
@@ -406,31 +465,37 @@ def build_page(
 
     @ui.refreshable
     def content() -> None:
-        try:
-            f = filters()
-            rows = transaction_rows(engine, f)
-            valid_filters = True
-        except ValueError as exc:
-            logger.exception("Refresh results failed: invalid filters (%s)", type(exc).__name__)
-            ui.label(str(exc)).classes("text-red-700")
-            rows = []
-            f = Filters()
-            valid_filters = False
-        logger.debug("Refresh results: displaying %d matching transactions", len(rows))
-        ui.label(f"{len(rows):,} matching transactions in the transaction list").classes(
-            "text-sm text-gray-600"
-        )
-        with ui.tabs(on_change=select_tab).classes("w-full") as tabs:
+        active_tab = selected_tab["value"]
+        with ui.tabs().classes("w-full") as tabs:
+            overview = ui.tab("Overview")
             dashboard = ui.tab("Analysis")
             transactions = ui.tab("Transactions")
             category_tab = ui.tab("Categories")
             examples_tab = ui.tab("Manual examples")
             imports = ui.tab("Import history")
-        with ui.tab_panels(tabs, value=selected_tab["value"]).classes("w-full report-panels"):
+        with ui.tab_panels(tabs, value=active_tab).classes("w-full report-panels"):
+            with ui.tab_panel(overview):
+                build_overview(engine, overview_state, transaction_editor, money, columns)
             with ui.tab_panel(dashboard).classes("analysis-panel"):
-                if valid_filters:
-                    build_analysis(engine, f, analysis_state, transaction_editor, money, columns)
+                filter_controls(analysis_filters, analysis=True)
+                build_analysis(
+                    engine,
+                    analysis_filters.applied,
+                    analysis_state,
+                    transaction_editor,
+                    money,
+                    columns,
+                )
             with ui.tab_panel(transactions):
+                filter_controls(transaction_filters)
+                rows = (
+                    transaction_rows(engine, transaction_filters.applied)
+                    if not transaction_filters.error
+                    else []
+                )
+                ui.label(f"{len(rows):,} matching transactions in the transaction list").classes(
+                    "text-sm text-gray-600"
+                )
                 ui.label(
                     "Click a row to view its full description, correct that transaction, "
                     "or view its history."
@@ -552,12 +617,14 @@ def build_page(
                     pagination=20,
                 ).classes("w-full")
 
+        tabs.on_value_change(select_tab)
+
     def show_activity(summary: str) -> None:
         activity.set_text(summary)
         activity.set_visibility(bool(summary))
 
     with tools_panels, ui.tab_panel("categorization"):
-        build_ai_panel(engine, ai_client, auth, filters, refresh, show_activity)
+        build_ai_panel(engine, ai_client, auth, transaction_filters.filters, refresh, show_activity)
     content()
     refresh()
 

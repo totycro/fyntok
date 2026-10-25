@@ -363,7 +363,7 @@ def build_ai_panel(
 
         async def recalculate(filtered: bool = False) -> None:
             action = (
-                "Recalculate categories — current filters"
+                "Recalculate categories — Transactions filters"
                 if filtered
                 else "Recalculate categories — all transactions"
             )
@@ -403,7 +403,7 @@ def build_ai_panel(
                 "Recalculate categories — all transactions", on_click=lambda: recalculate(False)
             )
             ui.button(
-                "Recalculate categories — current filters", on_click=lambda: recalculate(True)
+                "Recalculate categories — Transactions filters", on_click=lambda: recalculate(True)
             ).props("outline")
         with run_settings, ui.row():
             ui.button("Cancel selected run", on_click=cancel).props("outline")

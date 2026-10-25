@@ -13,6 +13,7 @@ from nicegui.testing import User
 from nicegui.testing.user_simulation import user_simulation
 
 from fyntok.ai import AI_MODEL, AIRequestError
+from fyntok.analysis_plot import AnalysisPlot
 from fyntok.app import build_page
 from fyntok.auth import PERMISSION, ChatGPTSession
 from fyntok.database import open_database
@@ -43,7 +44,7 @@ def test_cleaned_transaction_description_ui(tmp_path: Path, description: str, cl
             lambda: build_page(engine, auth=ChatGPTSession(tmp_path / "credentials"))
         ) as user:
             await user.open("/")
-            user.find("Transactions").click()
+            user.find(kind=ui.tab, content="Transactions").click()
             table = next(
                 t
                 for t in user.find(ui.table).elements
@@ -120,7 +121,7 @@ def test_internal_transfers_remain_in_table_but_not_statistics(tmp_path: Path) -
                 assert not plot.figure.data
             summaries = next(t for t in user.find(ui.table).elements if t.row_key == "key")
             assert summaries.rows == []
-            user.find("Transactions").click()
+            user.find(kind=ui.tab, content="Transactions").click()
             table = next(
                 t
                 for t in user.find(ui.table).elements
@@ -267,6 +268,10 @@ def test_numeric_table_columns(tmp_path: Path) -> None:
                     }:
                         assert column["field"] == f"{name}_cents"
                         assert ":format" in column
+                    elif name == "share":
+                        assert ":format" in column
+                        assert column["sortable"]
+                        continue
                     elif name.endswith("_count"):
                         assert column["field"] == name
                         assert ":format" in column
@@ -334,7 +339,7 @@ def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
             user.find("Save").click()
             await user.should_see("Food")
             assert any(c["name"] == "Food" for c in categories(engine))
-            user.find("Transactions").click()
+            user.find(kind=ui.tab, content="Transactions").click()
             table = next(
                 t
                 for t in user.find(ui.table).elements
@@ -399,7 +404,7 @@ def test_manual_ui_workflow(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
             user.find("Description contains").type("missing")
             user.find("Apply filters").click()
             await user.should_see("0 matching transactions")
-            user.find("Clear").click()
+            user.find(marker="clear-transaction-filters").click()
             await user.should_see("1 matching transactions")
             user.find("Categories").click()
             user.find("Edit").click()
@@ -848,5 +853,117 @@ def test_manual_examples_ui(tmp_path: Path, replace_before_delete: bool) -> None
         asyncio.run(scenario())
         if not replace_before_delete:
             assert transaction_rows(engine) == before
+    finally:
+        engine.dispose()
+
+
+def test_categorization_uses_applied_transaction_filters(tmp_path: Path) -> None:
+    engine = open_database(tmp_path / "local-filters.sqlite3")
+    import_content(
+        engine,
+        b"a;Shop;01.03.2024;01.03.2024;-10,00;EUR\na;Other;02.03.2024;02.03.2024;-20,00;EUR\n",
+        "synthetic.csv",
+    )
+    seen: list[str] = []
+
+    class Advisor:
+        def propose(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
+            del model, payload
+            raise NotImplementedError("This scenario only categorizes transactions.")
+
+        def classify(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
+            del model
+            seen.extend(t["description"] for t in payload["transactions"])
+            return {
+                "assignments": [
+                    {
+                        "transaction_id": t["transaction_id"],
+                        "category_id": "uncategorized",
+                        "reason": "Unclear",
+                    }
+                    for t in payload["transactions"]
+                ]
+            }
+
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(engine, Advisor(), ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            user.find(kind=ui.tab, content="Transactions").click()
+            user.find("Description contains").type("Shop")
+            user.find("Apply filters").click()
+            await user.should_see("1 matching transactions")
+            # A draft edit must not change the categorization selection.
+            user.find("Description contains").clear().type("Other")
+            user.find(kind=ui.tab, content="Analysis").click()
+            user.find("Analysis description contains").type("No matching description")
+            user.find("Apply analysis filters").click()
+            await user.should_see("No matching history.")
+            user.find(kind=ui.button, content="Categorize").click()
+            user.find("Recalculate categories — Transactions filters").click()
+            await user.should_see("Completed: 1 applied")
+            assert seen == ["Shop"]
+            rows = {r["description"]: r for r in transaction_rows(engine)}
+            assert rows["Shop"]["source"] == "ai"
+            assert rows["Other"]["source"] == "unassigned"
+            user.find(marker="close-data-tools").click()
+            user.find(kind=ui.tab, content="Transactions").click()
+            draft = user.find("Description contains").elements.pop()
+            assert isinstance(draft, ui.input)
+            assert draft.value == "Other"
+            await user.should_see("1 matching transactions")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        engine.dispose()
+
+
+def test_empty_overview_updates_after_import_and_correction(tmp_path: Path) -> None:
+    engine = open_database(tmp_path / "overview-refresh.sqlite3")
+
+    async def scenario() -> None:
+        async with user_simulation(
+            lambda: build_page(engine, auth=ChatGPTSession(tmp_path / "credentials"))
+        ) as user:
+            await user.open("/")
+            await user.should_see("No transactions yet.")
+            upload = user.find(ui.upload).elements.pop()
+            with user:
+                await upload.handle_uploads(
+                    [
+                        ui.upload.SmallFileUpload(
+                            "synthetic.csv",
+                            "text/csv",
+                            b"a;Shop;01.03.2024;01.03.2024;-10,00;EUR\n",
+                        )
+                    ]
+                )
+            await user.should_see(marker="overview-spending_cents", content="0.00 EUR")
+            food = save_category(engine, "Food", "Food spending")
+            correct_transaction(engine, transaction_rows(engine)[0]["id"], food)
+            # Another successful upload refreshes the dashboard without changing its month.
+            with user:
+                await upload.handle_uploads(
+                    [
+                        ui.upload.SmallFileUpload(
+                            "repeat.csv",
+                            "text/csv",
+                            b"a;Shop;01.03.2024;01.03.2024;-10,00;EUR\n",
+                        )
+                    ]
+                )
+            await user.should_see(marker="overview-spending_cents", content="10.00 EUR")
+            plot = user.find(marker="overview-category-chart").elements.pop()
+            assert isinstance(plot, AnalysisPlot)
+            assert isinstance(plot.figure, go.Figure)
+            trace = plot.figure.data[0]
+            assert isinstance(trace, go.Bar)
+            assert list(zip(trace.y, trace.x, strict=True)) == [("Food", 10)]
+            assert any(panel.value == "Overview" for panel in user.find(ui.tab_panels).elements)
+
+    try:
+        asyncio.run(scenario())
     finally:
         engine.dispose()
