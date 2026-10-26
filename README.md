@@ -22,6 +22,20 @@ port, use `uv run --locked python -m fyntok.cli --database /path/to/file.sqlite3
 
 The database defaults to `data/fyntok.sqlite3`; select another with `fyntok --database /path/to/file.sqlite3 import /path/to/export.csv`. Data, databases, and virtual environments are ignored by Git. `uv.lock` fixes transitive dependencies. Direct dependencies are pinned; Plotly 6.9.0 is the latest stable version compatible with NiceGUI's Plotly extra (`<7`).
 
+To create a timestamped, verified database backup while the app keeps running:
+
+```bash
+uv run --locked python scripts/backup-db.py
+# Optional custom database and backup directory:
+uv run --locked python scripts/backup-db.py --database /path/to/file.sqlite3 --output-dir /path/to/backups
+```
+
+By default, the backup is saved beside `data/fyntok.sqlite3` as
+`fyntok.backup-<UTC timestamp>.sqlite3`. The script uses SQLite's backup API to include committed
+WAL data, checks the backup's integrity, and prints its absolute path. Existing backups are never
+overwritten. The backup contains all database data, including original CSV uploads, categories,
+assignments, and import history.
+
 To remove test transactions while keeping all category names and definitions, stop the app and run:
 
 ```bash
