@@ -281,10 +281,14 @@ def test_numeric_table_columns(tmp_path: Path) -> None:
                     assert column["sortable"]
                     assert column["align"] == "right"
                     assert column["classes"] == "tabular-nums"
-                    assert all(type(row[column["field"]]) is int for row in table.rows)
+                    assert all(
+                        type(row[column["field"]]) is int
+                        or (name in {"average", "median"} and row[column["field"]] is None)
+                        for row in table.rows
+                    )
 
             transactions = next(
-                t for t in tables if t.row_key == "id" and t.rows and "amount_cents" in t.rows[0]
+                t for t in tables if "source_label" in {column["name"] for column in t.columns}
             )
             assert sorted(row["amount_cents"] for row in transactions.rows) == [
                 -100001,
@@ -295,9 +299,12 @@ def test_numeric_table_columns(tmp_path: Path) -> None:
                 1000,
                 100001,
             ]
-            summaries = next(t for t in tables if t.row_key == "key")
-            # Uncategorized money is exposed separately, not ranked as categorized spending.
-            assert summaries.rows == []
+            summaries = user.find(marker="analysis-breakdown-table").elements.pop()
+            assert isinstance(summaries, ui.table)
+            assert len(summaries.rows) == 1
+            assert summaries.rows[0]["key"] == "uncategorized"
+            assert summaries.rows[0]["spending_cents"] == 101201
+            assert summaries.rows[0]["share"] == 100
             await user.should_see("Uncategorized · outgoing 1,012.01 EUR · incoming 1,012.01 EUR")
             imports = next(t for t in tables if t.rows and "filename" in t.rows[0])
             assert {row["inserted_count"] for row in imports.rows} == {0, 7}
@@ -940,7 +947,8 @@ def test_empty_overview_updates_after_import_and_correction(tmp_path: Path) -> N
                         )
                     ]
                 )
-            await user.should_see(marker="overview-spending_cents", content="0.00 EUR")
+            await user.should_see(marker="overview-spending_cents", content="10.00 EUR")
+            user.find(marker="overview-category-chart").elements.pop().mark("before-categorizing")
             food = save_category(engine, "Food", "Food spending")
             correct_transaction(engine, transaction_rows(engine)[0]["id"], food)
             # Another successful upload refreshes the dashboard without changing its month.
@@ -954,6 +962,7 @@ def test_empty_overview_updates_after_import_and_correction(tmp_path: Path) -> N
                         )
                     ]
                 )
+            await user.should_not_see(marker="before-categorizing")
             await user.should_see(marker="overview-spending_cents", content="10.00 EUR")
             plot = user.find(marker="overview-category-chart").elements.pop()
             assert isinstance(plot, AnalysisPlot)

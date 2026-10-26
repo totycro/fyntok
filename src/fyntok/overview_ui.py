@@ -151,7 +151,7 @@ def build_overview(
                     drill(metadata["category_id"])
 
         if not report.categories:
-            ui.label("No categorized spending this month.")
+            ui.label("No outgoing spending this month.")
         else:
             plot = AnalysisPlot(breakdown_figure(report.categories, chosen)).classes("w-full")
             plot.mark("overview-category-chart")
@@ -160,7 +160,10 @@ def build_overview(
                 "text-sm text-gray-600"
             )
         ui.label(
-            "Internal transfers excluded. Categorized credits, including refunds, count as income."
+            "Spending includes all outgoing money, including uncategorized transactions. "
+            "Uncategorized amounts are also shown separately for reference. "
+            "Internal transfers excluded. "
+            "Categorized credits, including refunds, count as income."
         ).classes("text-sm text-gray-600")
 
     overview()

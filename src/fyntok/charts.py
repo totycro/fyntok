@@ -186,7 +186,12 @@ def cashflow_figure(
         fields = [("spending_cents", "Spending", "#2563eb")]
         if not spending_only:
             fields.extend(
-                [("income_cents", "Income", "#16a34a"), ("net_cents", "Net cash flow", "#9333ea")]
+                [
+                    ("income_cents", "Income", "#16a34a"),
+                    ("uncategorized_outgoing_cents", "Uncategorized outgoing", "#64748b"),
+                    ("uncategorized_incoming_cents", "Uncategorized incoming", "#a16207"),
+                    ("net_cents", "Net cash flow", "#9333ea"),
+                ]
             )
         for field, name, color in fields:
             amounts = [
@@ -208,12 +213,22 @@ def cashflow_figure(
                         mode="lines+markers",
                         line_color=color,
                         connectgaps=False,
-                        customdata=metadata,
+                        customdata=[
+                            dict(data, bucket=field.removesuffix("_cents")) for data in metadata
+                        ],
                     )
                 )
             else:
                 figure.add_trace(
-                    go.Bar(x=labels, y=amounts, name=name, marker_color=color, customdata=metadata)
+                    go.Bar(
+                        x=labels,
+                        y=amounts,
+                        name=name,
+                        marker_color=color,
+                        customdata=[
+                            dict(data, bucket=field.removesuffix("_cents")) for data in metadata
+                        ],
+                    )
                 )
     if rolling and not yearly:
         averages: list[float | None] = []

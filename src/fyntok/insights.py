@@ -105,11 +105,10 @@ def totals(rows: list[dict[str, Any]]) -> dict[str, int]:
     for row in rows:
         for field in ("net_cents", "outgoing_cents", "incoming_cents"):
             result[field] += row[field]
-        if row["bucket"] == "spending":
-            result["spending_cents"] += row["outgoing_cents"]
-        elif row["bucket"] == "income":
+        result["spending_cents"] += row["outgoing_cents"]
+        if row["bucket"] == "income":
             result["income_cents"] += row["incoming_cents"]
-        else:
+        elif row["bucket"] == "uncategorized":
             result["uncategorized_outgoing_cents"] += row["outgoing_cents"]
             result["uncategorized_incoming_cents"] += row["incoming_cents"]
     return result
@@ -128,9 +127,10 @@ def rounded_median(values: list[int]) -> int | None:
 
 
 def spending_groups(rows: list[dict[str, Any]], *, merchant: bool = False) -> list[dict[str, Any]]:
+    """Group every non-transfer debit, regardless of its category or assignment."""
     grouped: dict[str, dict[str, Any]] = {}
     for row in rows:
-        if row["bucket"] != "spending":
+        if not row["outgoing_cents"]:
             continue
         key = row["merchant"] if merchant else row["category_id"]
         group = grouped.setdefault(
@@ -246,7 +246,7 @@ def build_report(
             sum(
                 row["outgoing_cents"]
                 for row in grouped[month]
-                if row["bucket"] == "spending" and row["category_id"] == category["key"]
+                if row["category_id"] == category["key"]
             )
             for month in eligible_months
         ]
@@ -256,7 +256,7 @@ def build_report(
             month: sum(
                 row["outgoing_cents"]
                 for row in grouped[month]
-                if row["bucket"] == "spending" and row["category_id"] == category["key"]
+                if row["category_id"] == category["key"]
             )
             if month in history
             else None

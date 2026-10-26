@@ -94,6 +94,9 @@ def build_analysis(
         ui.label(
             "Reports reflect the active filters. Categorized credits count as income, "
             "including refunds. "
+            "Spending includes all outgoing money, including uncategorized transactions "
+            "and debits assigned to income categories. "
+            "Uncategorized amounts are also shown separately for reference. "
             "Net cash flow includes uncategorized money; internal transfers are excluded."
         ).classes("text-sm text-gray-600")
         if chosen is None:
@@ -285,11 +288,18 @@ def build_analysis(
                 if kinds.get(row["category_id"], "uncategorized") != "transfer"
             ]
             if spending_only or "category_id" in metadata or "merchant" in metadata:
+                rows = [row for row in rows if row["amount_cents"] < 0]
+            bucket = metadata.get("bucket")
+            if bucket in {"uncategorized_outgoing", "uncategorized_incoming"}:
                 rows = [
                     row
                     for row in rows
-                    if row["amount_cents"] < 0
-                    and kinds.get(row["category_id"], "uncategorized") == "spending"
+                    if kinds.get(row["category_id"], "uncategorized") == "uncategorized"
+                    and (
+                        row["amount_cents"] < 0
+                        if bucket == "uncategorized_outgoing"
+                        else row["amount_cents"] > 0
+                    )
                 ]
             with ui.dialog() as dialog, ui.card().classes("w-full max-w-5xl"):
                 ui.label("Transactions behind this report").classes("text-xl font-semibold")
@@ -307,11 +317,13 @@ def build_analysis(
                         month_start(start, -11), month_start(first), filters.start or date.min
                     )
                     detail_report = build_report(engine, selection, Period(detail_start, end))
+                    detail_series = detail_report.series
+                    detail_average = detail_report.average_cents
                     ui.label(f"Spending trend · {detail_start} through {end}").classes("text-sm")
-                    if detail_report.average_cents is not None:
+                    if detail_average is not None:
                         ui.label(
                             "Average monthly spending · "
-                            f"{money(detail_report.average_cents)} {chosen} · "
+                            f"{money(detail_average)} {chosen} · "
                             f"{len(detail_report.eligible_months)} eligible months"
                         ).classes("font-medium")
                     else:
@@ -321,10 +333,10 @@ def build_analysis(
                         ).classes("text-sm text-gray-600")
                     AnalysisPlot(
                         cashflow_figure(
-                            detail_report.series,
+                            detail_series,
                             chosen,
                             spending_only=True,
-                            average_cents=detail_report.average_cents,
+                            average_cents=detail_average,
                         )
                     ).classes("w-full")
                 table = (
@@ -581,7 +593,8 @@ def build_analysis(
                 [
                     row
                     for row in transaction_rows(engine, report.filters)
-                    if row["amount_cents"] < 0 and kinds.get(row["category_id"]) == "spending"
+                    if row["amount_cents"] < 0
+                    and kinds.get(row["category_id"], "uncategorized") != "transfer"
                 ],
                 key=lambda row: row["amount_cents"],
             )[:10]
