@@ -153,7 +153,9 @@ def build_overview(
         if not report.categories:
             ui.label("No outgoing spending this month.")
         else:
-            plot = AnalysisPlot(breakdown_figure(report.categories, chosen)).classes("w-full")
+            plot = AnalysisPlot(
+                breakdown_figure(report.categories, chosen, show_amounts=True)
+            ).classes("w-full")
             plot.mark("overview-category-chart")
             plot.on("plotly_click", chart_clicked, args=["points"])
             ui.label("Bars show the top 20 categories. Click a bar to inspect spending.").classes(

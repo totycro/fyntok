@@ -98,7 +98,11 @@ def category_color(key: str) -> str:
 
 
 def breakdown_figure(
-    rows: list[dict[str, Any]], currency: str, *, merchant: bool = False
+    rows: list[dict[str, Any]],
+    currency: str,
+    *,
+    merchant: bool = False,
+    show_amounts: bool = False,
 ) -> go.Figure:
     displayed = list(reversed(rows[:20]))
     figure = go.Figure()
@@ -113,7 +117,12 @@ def breakdown_figure(
                     {"merchant" if merchant else "category_id": row["key"]} for row in displayed
                 ],
                 text=[f"{row['share']:.1f}%" for row in displayed],
-                hovertemplate="%{y}: %{x:,.2f} " + currency + "<extra></extra>",
+                hovertext=[f"{row['share']:.1f}% of spending" for row in displayed],
+                hovertemplate=(
+                    "%{y}: %{x:,.2f} "
+                    + currency
+                    + "<br><span style='font-size:12px'>%{hovertext}</span><extra></extra>"
+                ),
             )
         )
     figure.update_layout(
@@ -123,6 +132,16 @@ def breakdown_figure(
         xaxis_title=currency,
         yaxis={"automargin": True},
     )
+    if show_amounts and displayed:
+        figure.update_traces(
+            texttemplate="%{x:,.2f} " + currency,
+            textposition="outside",
+            textfont={"size": 14, "color": "#0f172a"},
+            cliponaxis=False,
+        )
+        maximum = max(row["spending_cents"] for row in displayed) / 100
+        figure.update_xaxes(range=[0, maximum * 1.3 if maximum else 1])
+        figure.update_layout(margin={"r": 80})
     return figure
 
 
