@@ -17,10 +17,12 @@ from .insights import (
     Report,
     build_report,
     currency_options,
+    default_overview_month,
     month_period,
     month_start,
     months_in,
     observed_history,
+    period_label,
 )
 from .queries import Filters, transaction_rows
 
@@ -132,9 +134,7 @@ def build_analysis(
             if monthly:
                 available = months_in(Period(lower, upper))
                 if state.month not in available:
-                    current_month = month_start(date.today()).isoformat()[:7]
-                    completed = [month for month in available if month < current_month]
-                    state.month = completed[-1] if completed else available[-1]
+                    state.month = default_overview_month(Period(lower, upper), date.today())
                 ui.select(
                     list(reversed(available)),
                     value=state.month,
@@ -216,12 +216,6 @@ def build_analysis(
         )
         if not report.totals["outgoing_cents"] and not report.totals["incoming_cents"]:
             ui.label("No financial activity matches these filters in this period.")
-        if selected == Period(date(selected.start.year, 1, 1), date(selected.start.year, 12, 31)):
-            period_label = str(selected.start.year)
-        elif selected == month_period(selected.start):
-            period_label = selected.start.strftime("%B %Y")
-        else:
-            period_label = f"{selected.start} through {selected.end}"
         with (
             ui.row()
             .classes("analysis-context w-full items-center gap-x-4 gap-y-1 px-3 py-3")
@@ -229,7 +223,7 @@ def build_analysis(
             .mark("analysis-context")
         ):
             (
-                ui.label(period_label)
+                ui.label(period_label(selected))
                 .classes("text-lg font-semibold text-blue-900")
                 .style("text-wrap: balance")
                 .props(f'title="Selected period: {selected.start} through {selected.end}"')

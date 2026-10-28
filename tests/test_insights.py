@@ -26,7 +26,9 @@ from fyntok.insights import (
     build_report,
     comparison_period,
     currency_options,
+    default_overview_month,
     month_period,
+    period_label,
 )
 from fyntok.manual import correct_transaction, save_category
 from fyntok.queries import Filters, transaction_rows
@@ -408,9 +410,13 @@ def test_drilldown_monthly_average(
         (date(2024, 1, 20), "2024-08"),
     ],
 )
-def test_analysis_monthly_view_defaults_to_completed_month(
-    ledger: Engine, tmp_path: Path, today: date, expected: str
-) -> None:
+def test_analysis_monthly_view_defaults_to_completed_month(today: date, expected: str) -> None:
+    assert default_overview_month(Period(date(2024, 1, 15), date(2024, 8, 20)), today) == expected
+
+
+def test_analysis_default_month_ui(ledger: Engine, tmp_path: Path) -> None:
+    today = date(2024, 8, 20)
+
     class Calendar(date):
         @classmethod
         @override
@@ -424,16 +430,31 @@ def test_analysis_monthly_view_defaults_to_completed_month(
             await user.open("/")
             month = user.find("Overview month").elements.pop()
             assert isinstance(month, ui.select)
-            assert month.value == expected
+            assert month.value == "2024-07"
 
     with patch("fyntok.analysis_ui.date", Calendar):
         asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
+    ("start", "end", "expected"),
+    [
+        (date(2024, 3, 1), date(2024, 3, 31), "March 2024"),
+        (date(2024, 1, 1), date(2024, 12, 31), "2024"),
+        (date(2024, 2, 10), date(2024, 3, 20), "2024-02-10 through 2024-03-20"),
+        (date(2024, 3, 10), date(2024, 3, 20), "2024-03-10 through 2024-03-20"),
+        (date(2024, 4, 1), date(2024, 4, 30), "April 2024"),
+        (date(2024, 2, 1), date(2024, 2, 29), "February 2024"),
+        (date(2024, 1, 1), date(2024, 12, 30), "2024-01-01 through 2024-12-30"),
+    ],
+)
+def test_analysis_period_label(start: date, end: date, expected: str) -> None:
+    assert period_label(Period(start, end)) == expected
+
+
+@pytest.mark.parametrize(
     ("state", "filters", "expected"),
     [
-        (AnalysisState(month="2024-03"), Filters(), "March 2024"),
         (
             AnalysisState(view="Historical explorer", history_period="2024"),
             Filters(),
@@ -454,7 +475,6 @@ def test_analysis_monthly_view_defaults_to_completed_month(
             Filters(start=date(2024, 3, 10), end=date(2024, 3, 20), currency="EUR"),
             "2024-03-10 through 2024-03-20",
         ),
-        (AnalysisState(month="2024-04"), Filters(), "April 2024"),
         (AnalysisState(), Filters(search="No matching transaction"), None),
         (
             AnalysisState(

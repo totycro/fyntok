@@ -45,6 +45,23 @@ def months_in(period: Period) -> list[str]:
     return result
 
 
+def default_overview_month(period: Period, today: date) -> str:
+    """Prefer the latest completed month, falling back to the latest available month."""
+    available = months_in(period)
+    current_month = month_start(today).isoformat()[:7]
+    completed = [month for month in available if month < current_month]
+    return completed[-1] if completed else available[-1]
+
+
+def period_label(period: Period) -> str:
+    """Describe full calendar years/months without hiding partial date ranges."""
+    if period == Period(date(period.start.year, 1, 1), date(period.start.year, 12, 31)):
+        return str(period.start.year)
+    if period == month_period(period.start):
+        return period.start.strftime("%B %Y")
+    return f"{period.start} through {period.end}"
+
+
 def comparison_period(period: Period, *, year_ago: bool = False) -> Period:
     def previous_year(day: date) -> date:
         return day.replace(
