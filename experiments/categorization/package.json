@@ -2,5 +2,5 @@
   "name": "fyntok-categorization-evals",
   "private": true,
   "engines": { "node": ">=22.22.0" },
-  "dependencies": { "promptfoo": "0.124.1" }
+  "dependencies": { "promptfoo": "0.125.1" }
 }

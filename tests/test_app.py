@@ -576,7 +576,8 @@ def test_proposal_failure_logs_traceback_at_default_level(
             r for r in caplog.records if r.getMessage().startswith("Propose categories failed")
         )
         assert record.levelno == logging.ERROR
-        assert record.exc_info and record.exc_info[0] is error_type
+        assert isinstance(record.exc_info, tuple)
+        assert record.exc_info[0] is error_type
         assert "Traceback (most recent call last):" in caplog.text
         assert f"{error_type.__name__}: proposal request failed" in caplog.text
         assert "in propose" in caplog.text
