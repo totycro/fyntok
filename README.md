@@ -26,6 +26,12 @@ Override the default with `just test -n 2`, or use `just test -n 0` for serial d
 small targeted runs, for example `just test -n 0 tests/test_insights.py -k monthly_average`.
 Direct `uv run --locked pytest` commands use the same defaults.
 
+Test runs measure line and branch coverage across all of `src/fyntok` and enforce a **89% combined
+coverage target**. Falling below the target fails the run even when all tests pass.
+Each run prints missing lines and writes `htmlcov/index.html` and `coverage.xml` (ignored by Git).
+For focused tests without the full-suite coverage gate, use
+`just test --no-cov -n 0 tests/test_insights.py -k monthly_average`.
+
 The database defaults to `data/fyntok.sqlite3`; select another with `fyntok --database /path/to/file.sqlite3 import /path/to/export.csv`. Data, databases, and virtual environments are ignored by Git. `uv.lock` fixes transitive dependencies. Direct dependencies are pinned; Plotly 6.9.0 is the latest stable version compatible with NiceGUI's Plotly extra (`<7`).
 
 To create a timestamped, verified database backup while the app keeps running:
