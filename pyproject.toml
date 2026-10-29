@@ -14,6 +14,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest==9.2.0",
+    "pytest-xdist==3.8.0",
     "ruff==0.17.3",
     "ty==0.0.93",
 ]
@@ -27,6 +28,9 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Full-suite benchmarks favor four processes; work stealing balances the slower UI tests.
+# Override with `just test -n 0` for serial debugging or `just test -n 2` for fewer workers.
+addopts = "-n 4 --dist=worksteal"
 
 [tool.ruff]
 target-version = "py314"

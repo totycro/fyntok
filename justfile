@@ -11,6 +11,7 @@ typecheck:
     uv run --locked ty check .
 
 # Pass pytest arguments, for example: just test -q tests/test_data.py
+# Defaults to four workers; use -n 0 for serial debugging or small targeted runs.
 test *args:
     uv run --locked pytest {{args}}
 

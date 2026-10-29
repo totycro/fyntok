@@ -526,7 +526,10 @@ def test_ai_ui_proposals_fixed_model_and_recalculation(
             await user.should_see("Category approved and saved.")
             assert {c["name"] for c in categories(engine)} == {"Food", "Uncategorized"}
             user.find("Recalculate categories — all transactions").click()
-            await user.should_see("Completed: 1 applied, 0 protected or changed; 1 / 1 processed.")
+            # Background SQLite work can outlast the simulator's 300 ms default under load.
+            await user.should_see(
+                "Completed: 1 applied, 0 protected or changed; 1 / 1 processed.", retries=30
+            )
             assert transaction_rows(engine)[0]["category"] == "Food"
             assert transaction_rows(engine)[0]["source"] == "ai"
             user.find("Sign out").click()

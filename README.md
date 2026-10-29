@@ -20,6 +20,12 @@ For development, run `just dev` (requires [just](https://just.systems/)) with de
 may reset. Normal `fyntok serve` runs without reload. To enable reload with a custom database or
 port, use `uv run --locked python -m fyntok.cli --database /path/to/file.sqlite3 serve --reload --port 8081`.
 
+Run `just check` for linting, type checking, and the full test suite. Tests use four isolated
+pytest-xdist worker processes with work-stealing scheduling to balance the slower UI tests.
+Override the default with `just test -n 2`, or use `just test -n 0` for serial debugging and
+small targeted runs, for example `just test -n 0 tests/test_insights.py -k monthly_average`.
+Direct `uv run --locked pytest` commands use the same defaults.
+
 The database defaults to `data/fyntok.sqlite3`; select another with `fyntok --database /path/to/file.sqlite3 import /path/to/export.csv`. Data, databases, and virtual environments are ignored by Git. `uv.lock` fixes transitive dependencies. Direct dependencies are pinned; Plotly 6.9.0 is the latest stable version compatible with NiceGUI's Plotly extra (`<7`).
 
 To create a timestamped, verified database backup while the app keeps running:
