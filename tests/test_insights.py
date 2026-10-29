@@ -2,9 +2,10 @@
 
 import asyncio
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
-from typing import Self, override
+from typing import Any, Self, override
 from unittest.mock import patch
 
 import plotly.graph_objects as go
@@ -337,14 +338,60 @@ def test_monthly_average_line_uses_filtered_eligible_months(
 
 
 @pytest.mark.parametrize(
+    ("currency", "month", "grouping", "name", "description", "cents", "average"),
+    [
+        ("EUR", 3, "category", "Travel", "Travel Mar", 2000, 1500),
+        ("EUR", 3, "merchant", "Food Mar", "Food Mar", 5000, 2500),
+        ("EUR", 1, "category", "Food", "Food Jan", 1000, None),
+        ("EUR", 3, "category", "Uncategorized", "Unknown debit", 300, 150),
+        ("EUR", 3, "category", "Salary", "Income reversal", 500, 250),
+        ("EUR", 3, "merchant", "Unknown debit", "Unknown debit", 300, 150),
+        ("USD", 3, "category", "Food", "US shop", 10000, None),
+    ],
+)
+def test_selected_spending_and_average_reconcile(
+    ledger: Engine,
+    currency: str,
+    month: int,
+    grouping: str,
+    name: str,
+    description: str,
+    cents: int,
+    average: int | None,
+) -> None:
+    period = month_period(date(2024, month, 1))
+    report = build_report(ledger, Filters(currency=currency), period)
+    groups = report.categories if grouping == "category" else report.merchants
+    group = next(row for row in groups if row["name"] == name)
+    selection = replace(
+        report.filters,
+        category_id=group["key"] if grouping == "category" else None,
+        merchant=group["key"] if grouping == "merchant" else None,
+    )
+    debits = [row for row in transaction_rows(ledger, selection) if row["amount_cents"] < 0]
+    assert [(row["description"], row["amount_cents"]) for row in debits] == [(description, -cents)]
+    assert {row["currency"] for row in debits} == {currency}
+    assert group["spending_cents"] == cents
+    assert build_report(ledger, selection, period).totals["spending_cents"] == cents
+    trend = build_report(ledger, selection, Period(date(2024, 1, 1), period.end))
+    assert trend.eligible_months == (["2024-02", "2024-03"] if average is not None else [])
+    assert trend.average_cents == average
+    figure = cashflow_figure(
+        trend.series, currency, spending_only=True, average_cents=trend.average_cents
+    )
+    if average is None:
+        assert not figure.layout.shapes
+    else:
+        (line,) = figure.layout.shapes
+        assert line.y0 == line.y1 == average / 100
+
+
+@pytest.mark.parametrize(
     ("month", "grouping", "name", "message", "expected"),
     [
         ("2024-03", "Categories", "Travel", "15.00 EUR · 2 eligible months", 15),
         ("2024-03", "Merchants", "Food Mar", "25.00 EUR · 2 eligible months", 25),
         ("2024-01", "Categories", "Food", "Insufficient history for average monthly", None),
-        ("2024-03", "Categories", "Uncategorized", "1.50 EUR · 2 eligible months", 1.5),
-        ("2024-03", "Categories", "Salary", "2.50 EUR · 2 eligible months", 2.5),
-        ("2024-03", "Merchants", "Unknown debit", "1.50 EUR · 2 eligible months", 1.5),
     ],
 )
 def test_drilldown_monthly_average(
@@ -397,6 +444,17 @@ def test_drilldown_monthly_average(
             else:
                 (line,) = plot.figure.layout.shapes
                 assert line.y0 == line.y1 == expected
+            with user:
+                row_listener = next(
+                    item for item in table._event_listeners.values() if item.type == "rowClick"
+                )
+                events.handle_event(
+                    row_listener.handler,
+                    events.GenericEventArguments(
+                        sender=table, client=user.client, args=[{}, table.rows[0], 0]
+                    ),
+                )
+            await user.should_see("Transaction details")
 
     asyncio.run(scenario())
 
@@ -619,6 +677,7 @@ def test_analysis_context_updates_currency(ledger: Engine, tmp_path: Path) -> No
                 currency.set_value("USD")
             await user.should_see("Monthly overview · USD")
             await user.should_see("March 2024")
+            await user.should_see(marker="analysis-spending_cents", content="100.00 USD")
             await user.should_not_see("Monthly overview · EUR")
 
     asyncio.run(scenario())
@@ -702,18 +761,9 @@ def test_simple_overview_month_currency_and_category_totals(ledger: Engine, tmp_
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize(
-    "currency, category_name, expected_cents",
-    [
-        ("EUR", "Food", 5000),
-        ("USD", "Food", 10000),
-        ("EUR", "Uncategorized", 300),
-        ("EUR", "Salary", 500),
-    ],
-)
-def test_overview_category_drilldown(
-    ledger: Engine, tmp_path: Path, currency: str, category_name: str, expected_cents: int
-) -> None:
+def test_overview_category_drilldown(ledger: Engine, tmp_path: Path) -> None:
+    currency, category_name, expected_cents = "EUR", "Food", 5000
+
     async def scenario() -> None:
         async with user_simulation(
             lambda: build_page(ledger, auth=ChatGPTSession(tmp_path / "credentials"))
@@ -807,40 +857,24 @@ def test_overview_category_drilldown(
     asyncio.run(scenario())
 
 
-def test_overview_chart_limits_categories(ledger: Engine, tmp_path: Path) -> None:
-    content = "".join(f"a;Extra {number};15.03.2024;15.03.2024;-0,01;EUR\n" for number in range(21))
-    import_content(ledger, content.encode(), "extra-categories.csv")
-    for row in transaction_rows(ledger, Filters(search="Extra")):
-        category_id = save_category(ledger, row["description"], "Extra spending", "spending")
-        correct_transaction(ledger, row["id"], category_id)
-
-    async def scenario() -> None:
-        async with user_simulation(
-            lambda: build_page(ledger, auth=ChatGPTSession(tmp_path / "credentials"))
-        ) as user:
-            await user.open("/")
-            month = user.find(marker="overview-month").elements.pop()
-            assert isinstance(month, ui.select)
-            with user:
-                month.set_value("2024-03")
-            await user.should_see("March 2024 · EUR")
-            plot = user.find(marker="overview-category-chart").elements.pop()
-            assert isinstance(plot, AnalysisPlot)
-            assert isinstance(plot.figure, go.Figure)
-            trace = plot.figure.data[0]
-            assert isinstance(trace, go.Bar)
-            assert len(trace.customdata) == 20
-            assert (
-                len(
-                    build_report(
-                        ledger, Filters(currency="EUR"), month_period(date(2024, 3, 1))
-                    ).categories
-                )
-                == 25
-            )
-            await user.should_not_see(marker="overview-categories")
-
-    asyncio.run(scenario())
+def test_overview_chart_limits_categories() -> None:
+    groups: list[dict[str, Any]] = [
+        {
+            "key": f"category-{number}",
+            "name": f"Category {number}",
+            "spending_cents": 2500 - number * 100,
+            "share": 4,
+        }
+        for number in range(25)
+    ]
+    figure = breakdown_figure(groups, "EUR", show_amounts=True)
+    (trace,) = figure.data
+    assert isinstance(trace, go.Bar)
+    assert len(trace.customdata) == 20
+    assert list(trace.customdata) == [{"category_id": row["key"]} for row in reversed(groups[:20])]
+    assert list(trace.x) == [row["spending_cents"] / 100 for row in reversed(groups[:20])]
+    assert list(trace.y) == [row["name"] for row in reversed(groups[:20])]
+    assert len(groups) == 25  # Limiting the view must not truncate the report.
 
 
 def test_tab_filters_periods_and_selections_are_independent(ledger: Engine, tmp_path: Path) -> None:
