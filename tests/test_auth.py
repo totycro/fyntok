@@ -113,6 +113,24 @@ def test_callback_checks_state_and_rejects_changed_client_before_exchange(tmp_pa
         )
 
 
+def test_declined_chatgpt_login_reports_failure_without_connecting(tmp_path: Path) -> None:
+    session = ChatGPTSession(tmp_path)
+    authorization = parse_qs(urlparse(session.start_login()).query)
+    try:
+        with httpx.Client(trust_env=False, timeout=5) as browser:
+            response = browser.get(
+                authorization["redirect_uri"][0],
+                params={"state": authorization["state"][0], "error": "access_denied"},
+            )
+        assert response.status_code == 400
+        assert response.text == "Sign-in failed. Please try again."
+        assert session.login_error == response.text
+        assert session.pending is None
+        assert not session.is_connected(session.active_account())
+    finally:
+        session.pending = None
+
+
 def test_local_signout_clears_secrets_when_revocation_is_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -128,9 +146,20 @@ def test_local_signout_clears_secrets_when_revocation_is_unavailable(
         session.access_token()
 
 
-@pytest.mark.parametrize("problem", [None, "nonce", "signature", "expired", "identity"])
+@pytest.mark.parametrize(
+    "problem",
+    [
+        pytest.param(None, id="successful-browser-login"),
+        "nonce",
+        "signature",
+        "expired",
+        "identity",
+    ],
+)
 def test_code_exchange_validates_signed_identity_before_saving(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str | None
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    problem: str | None,
 ) -> None:
     from types import SimpleNamespace
 
@@ -139,7 +168,10 @@ def test_code_exchange_validates_signed_identity_before_saving(
 
     session = ChatGPTSession(tmp_path)
     record(session)
-    session.begin("http://127.0.0.1:1456/auth/callback", "issued-client")
+    if problem is None:
+        session.start_login("issued-client")
+    else:
+        session.begin("http://127.0.0.1:1456/auth/callback", "issued-client")
     assert session.pending is not None
     pending = session.pending.copy()
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -185,7 +217,7 @@ def test_code_exchange_validates_signed_identity_before_saving(
         "get_signing_key_from_jwt",
         lambda *_a: SimpleNamespace(key=key.public_key()),
     )
-    callback = f"http://127.0.0.1:1456/auth/callback?state={pending['state']}&code=one-use-code"
+    callback = f"{pending['redirect']}?state={pending['state']}&code=one-use-code"
     if problem is not None:
         with pytest.raises((ValueError, jwt.InvalidTokenError)):
             session.complete(callback)
@@ -194,7 +226,15 @@ def test_code_exchange_validates_signed_identity_before_saving(
             == "old-access"
         )
     else:
-        session.complete(callback)
+        try:
+            # Use request so the mocked discovery GET does not intercept the local browser.
+            response = httpx.request("GET", callback, trust_env=False, timeout=5)
+            assert response.status_code == 200
+            assert response.text == "Sign-in complete. Return to fyntok to use AI."
+            assert session.login_error is None
+            assert session.pending is None
+        finally:
+            session.pending = None
         assert ChatGPTSession(tmp_path).access_token() == "signed-in-access"
 
 
