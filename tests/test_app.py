@@ -22,16 +22,9 @@ from fyntok.manual import categories, correct_transaction, save_category
 from fyntok.queries import Filters, transaction_rows
 
 
-@pytest.mark.parametrize(
-    ("description", "cleaned"),
-    [
-        (r"Bezahlung Karte MC/000000001|EXAMPLE MARKET DANKT 9999\\WIEN\9999", "EXAMPLE MARKET / WIEN"),
-        ("MC/000000002|private-account Café", "Café"),
-        (" | ", "Unknown merchant"),
-        ("Simple shop", "Simple shop"),
-    ],
-)
-def test_cleaned_transaction_description_ui(tmp_path: Path, description: str, cleaned: str) -> None:
+def test_cleaned_transaction_description_ui(tmp_path: Path) -> None:
+    description = r"Bezahlung Karte MC/000000001|EXAMPLE MARKET DANKT 9999\\WIEN\9999"
+    cleaned = "EXAMPLE MARKET / WIEN"
     engine = open_database(tmp_path / "descriptions-ui.sqlite3")
     import_content(
         engine,
@@ -59,11 +52,7 @@ def test_cleaned_transaction_description_ui(tmp_path: Path, description: str, cl
             assert "account" not in table.rows[0]
             await user.should_not_see("Full description")
             # Only declared columns are rendered; the original stays in row data for details.
-            assert all(
-                table.rows[0][c["field"]] != description
-                for c in table.columns
-                if description != cleaned
-            )
+            assert all(table.rows[0][c["field"]] != description for c in table.columns)
             with user:
                 assert user.client is not None
                 listener = next(

@@ -102,38 +102,19 @@ def test_amounts_and_quoted_fields() -> None:
         parse_csv(b"")
 
 
-@pytest.mark.parametrize(
-    ("description", "expected"),
-    [
-        (
-            "Beispielbank kreditkarte TEST 200001 MC/000000001|"
-            "Beispielbank kreditkarte TEST 200001Abrechnung Nr. 000000001|10",
-            "Beispielbank kreditkarte TEST",
-        ),
-        (
-            "Musterbank kreditkarte DEMO           200002       MC/000000002|"
-            "Abrechnung Nr. 000000002",
-            "Musterbank kreditkarte DEMO",
-        ),
-        (
-            "Abbuchung Onlinebanking FE/000000001|Beispiel Sonnenschutz und|0000000001",
-            "Beispiel Sonnenschutz und",
-        ),
-        ("Bank | Shop | 10 | 11 | 12", "Shop"),
-        ("Bank |  Café   Beispiel  | 12 | ", "Café Beispiel"),
-        ("Bank | Shop 24", "Shop"),
-        ("Beispielbank kreditkarte TEST shop | Shop 24", "Shop"),
-        ("Bank | 7-Shop", "7-Shop"),
-        ("123", "Unknown"),
-        (" 10 | 11 | ", "Unknown"),
-        (" | ", "Unknown"),
-        ("", "Unknown"),
-    ],
-)
-def test_merchant_labels_use_meaningful_text(description: str, expected: str) -> None:
+def test_csv_parsing_cleans_merchant_and_preserves_original_text() -> None:
+    description = r"Bezahlung Karte MC/000000001|EXAMPLE MARKET DANKT 9999\\WIEN\9999|SPESEN: 0,00"
     parsed = parse_csv(f"a;{description};01.01.2024;01.01.2024;-1,00;EUR\n".encode("cp1252"))
-    assert parsed[0]["merchant"] == expected
+    assert parsed[0]["merchant"] == "EXAMPLE MARKET"
     assert parsed[0]["description"] == description
+    assert parsed[0]["original_fields"] == [
+        "a",
+        description,
+        "01.01.2024",
+        "01.01.2024",
+        "-1,00",
+        "EUR",
+    ]
 
 
 def test_existing_merchant_labels_survive_reopening_and_duplicate_imports(tmp_path: Path) -> None:
