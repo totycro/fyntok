@@ -236,7 +236,7 @@ def test_schema_v1_migration_preserves_data_and_protects_manual_assignments(tmp_
     try:
         assert transaction_rows(engine)[0]["protected"]
         with engine.connect() as connection:
-            assert connection.exec_driver_sql("SELECT version FROM schema_version").scalar() == 2
+            assert connection.exec_driver_sql("SELECT version FROM schema_version").scalar() == 3
         engine.dispose()
         reopened = open_database(path)
         assert transaction_rows(reopened)[0]["category"] == "Food"

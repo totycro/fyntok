@@ -61,11 +61,47 @@ Restart the app afterward to import fresh data.
 
 Imports expect six headerless, semicolon-separated CP1252 fields: account, description, booking date, value date, signed German decimal amount, and currency. Dates use `DD.MM.YYYY`; amounts require exactly two decimal places. The original file bytes and decoded fields are retained, including both dates and the account field. Validation or write failure rolls back the entire import. Financial values are stored and summed as integer cents.
 
+### Bank and credit-card payments
+
+Import bank and card exports into the same database. Purchases share categories and appear together
+in Transactions, Overview, Analysis, and CLI totals, using booking dates. Transactions shows a compact
+account label separately from the category assignment source. **Data tools → Import → Account settings**
+lets you rename an account or correct its type without changing category assignments. New accounts
+default to Bank, or Credit card when the export contains `EINZUGSBETRAG`; confirm the type with
+**Import account type**, especially for a card export containing only purchases. CLI equivalent:
+
+```bash
+uv run --locked fyntok import --account-kind credit_card path/to/card-export.csv
+```
+
+Positive card-side `EINZUGSBETRAG` entries are repayments, not income.
+Bank-side debits containing `Kreditkarte` and `Abrechnung` are settlement candidates. Entries
+are paired only when they are mutually unique, on different bank/card accounts, in the same currency,
+with opposite amounts and booking dates no more than three calendar days apart. Reconciliation runs
+after either import, including repeated imports; it does not depend on import order or filenames.
+Card repayment credits and matched bank withdrawals are excluded from financial totals, counts,
+largest expenses, and report drilldowns, but remain visible in Transactions. Purchases and fees
+count normally. This detects explicit settlement wording, not arbitrary transfers.
+
+Unmatched or ambiguous bank repayments remain in totals and generate a review warning. This keeps
+older bank-only history from silently losing spending when only a short card export is available.
+A matched bill does not prove that every underlying purchase was imported; transaction dates never
+establish complete account coverage. Unmatched card repayment credits are also flagged, but excluded
+from income unless a protected category conflicts. Protected non-transfer category decisions on
+either side block automatic exclusion and remain unchanged.
+
+Open a repayment in Transactions to choose **Repayment treatment**: Automatic, Include in totals,
+or Internal transfer. This review applies to that entry only, persists across imports, and creates
+no category assignment or AI example. Review the other entry separately when necessary. An explicit
+Internal transfer review can exclude an entry despite a protected category; Include in totals still
+respects an existing Internal transfer category. AI recalculation cannot change repayment treatment.
+Existing databases migrate to schema version 3, retaining original data and assignment history.
+
 Each successful import records its filename, hash, original bytes, timestamp, counts, and a mapping from every source row to its stored transaction. Repeat imports add an import-history entry but reuse transactions. Matching uses all six original fields plus the occurrence number within the export: two identical rows in a file remain two transactions, and overlapping exports retain the greatest observed multiplicity. With no bank-provided transaction ID, identical fields cannot distinguish an already imported transaction from a new identical transaction. Exports with changed fields count as new rows; review those inputs before importing.
 
 Analysis groups by booking month, currency, category, and financial bucket; merchant summaries use the same measures. Trends are the monthly category series. Each result includes transaction count, signed net cents, positive outgoing cents, and positive incoming cents. Unassigned transactions are Uncategorized regardless of sign. Transactions whose active category has the Internal transfer type are excluded from all analysis totals and transaction counts, including CLI output. Other categorized credits and income categories are income. Remaining categorized transactions are spending. No currency conversion or refund/reimbursement matching occurs. A shared `parse_description(description, account="")` parser returns `merchant_name` and `cleaned_description`. New imports store cleaned merchant names, removing recognized payment-processor prefixes, branch metadata, bank identifiers, and backslash-delimited locations while preserving brand digits such as EXAMPLE24. Empty names become Unknown. These groups do not assign categories. Existing stored merchant names remain unchanged, including on duplicate imports.
 
-The SQLAlchemy schema retains stable category IDs and definitions, previous and active assignments (at most one active assignment per transaction), one latest confirmed example per transaction, and durable categorization runs. Runs retain scope, category/example snapshots, and per-transaction revision, status, attempts, validated result, error, and applied assignment ID so subsequent milestones can implement safe resume and protection against intervening edits. SQLite foreign keys are enabled; writes use WAL and full synchronization. Schema version 2 is recorded. Opening a milestone 1 database automatically migrates version 1 in a transaction, preserving all data and marking existing manual assignments as protected; unknown versions are refused.
+The SQLAlchemy schema retains stable category IDs and definitions, previous and active assignments (at most one active assignment per transaction), one latest confirmed example per transaction, and durable categorization runs. Runs retain scope, category/example snapshots, and per-transaction revision, status, attempts, validated result, error, and applied assignment ID so subsequent milestones can implement safe resume and protection against intervening edits. SQLite foreign keys are enabled; writes use WAL and full synchronization. Schema version 3 is recorded. Opening an older database automatically migrates versions 1 and 2 transactionally, preserving all data and marking legacy manual assignments as protected; unknown versions are refused.
 
 Tests use temporary databases. The private dataset check runs when `data/data.csv` is present and otherwise reports a skip. It verifies all [private row count omitted] rows, every monthly total against an independent CSV calculation, both dates, exact net/debit/credit totals, repeat imports, and persistence after reopening. Synthetic checks cover duplicate rows, overlapping imports, invalid input rollback, signed amounts, currencies, active assignment aggregation, assignment history, confirmed examples, foreign keys, and persisted run progress.
 

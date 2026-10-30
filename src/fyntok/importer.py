@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from .accounts import reconcile_repayments, register_accounts
 from .descriptions import parse_description
 from .models import Import, ImportRow, Transaction
 
@@ -67,16 +68,21 @@ def parse_csv(content: bytes) -> list[dict[str, Any]]:
     return rows
 
 
-def import_csv(engine: Engine, path: str | Path) -> ImportResult:
+def import_csv(
+    engine: Engine, path: str | Path, *, account_kind: str | None = None
+) -> ImportResult:
     path = Path(path)
     content = path.read_bytes()
-    return import_content(engine, content, path.name)
+    return import_content(engine, content, path.name, account_kind=account_kind)
 
 
-def import_content(engine: Engine, content: bytes, filename: str) -> ImportResult:
+def import_content(
+    engine: Engine, content: bytes, filename: str, *, account_kind: str | None = None
+) -> ImportResult:
     """Import uploaded bytes with the same atomic behavior as a local file."""
     rows = parse_csv(content)  # Validate the entire file before writing anything.
     with Session(engine) as session, session.begin():
+        register_accounts(session, rows, account_kind)
         existing = {
             (t.row_sha256, t.occurrence): t.id for t in session.scalars(select(Transaction))
         }
@@ -105,6 +111,7 @@ def import_content(engine: Engine, content: bytes, filename: str) -> ImportResul
             session.add(
                 ImportRow(import_id=record.id, row_number=number, transaction_id=transaction_id)
             )
+        reconcile_repayments(session)
         return ImportResult(
             record.id, record.row_count, record.inserted_count, record.duplicate_count
         )

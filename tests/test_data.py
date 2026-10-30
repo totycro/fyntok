@@ -143,7 +143,10 @@ def test_existing_merchant_labels_survive_reopening_and_duplicate_imports(tmp_pa
         new_content = content.replace(b"01.01.2024", b"02.01.2024")
         assert import_content(engine, new_content, "bank.csv").inserted_count == 1
         with Session(engine) as session:
-            assert set(session.scalars(select(Transaction.merchant))) == {legacy_label, "EXAMPLE CARE"}
+            assert set(session.scalars(select(Transaction.merchant))) == {
+                legacy_label,
+                "EXAMPLE CARE",
+            }
     finally:
         engine.dispose()
 

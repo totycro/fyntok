@@ -58,6 +58,8 @@ def test_update_preserves_other_fields_history_and_backup(database: Path) -> Non
             "categorization_runs",
             "run_items",
             "schema_version",
+            "accounts",
+            "card_repayments",
         )
         preserved = {
             table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")]  # noqa: S608 — Fixed table names.

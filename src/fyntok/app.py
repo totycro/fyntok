@@ -13,6 +13,14 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from .accounts import (
+    ACCOUNT_KINDS,
+    TREATMENTS,
+    account_rows,
+    repayment_warning,
+    review_repayment,
+    update_account,
+)
 from .ai import AIClient, ResponsesClient
 from .analysis_ui import AnalysisState, build_analysis
 from .auth import ChatGPTSession
@@ -173,12 +181,22 @@ def build_page(
             "Headerless CP1252 CSV; semicolon separators and German "
             "dates/amounts. Repeated exports reuse existing rows."
         )
+        import_kind = ui.select(
+            {"auto": "Detect new accounts", **ACCOUNT_KINDS},
+            value="auto",
+            label="Import account type",
+        )
+        ui.label("Existing account types are reused. Bank and card purchases appear together.")
 
         async def upload(event: events.UploadEventArguments) -> None:
             logger.debug("Import CSV: reading upload and importing transactions")
             try:
                 result = await run.io_bound(
-                    import_content, engine, await event.file.read(), event.file.name
+                    import_content,
+                    engine,
+                    await event.file.read(),
+                    event.file.name,
+                    account_kind=None if import_kind.value == "auto" else import_kind.value,
                 )
                 if result is None:
                     raise RuntimeError("Background operation was cancelled.")
@@ -195,6 +213,7 @@ def build_page(
                     type="positive",
                 )
                 refresh()
+                accounts_panel.refresh()
             except (ValueError, SQLAlchemyError, UnicodeError) as exc:
                 logger.exception("CSV import failed (%s)", type(exc).__name__)
                 ui.notify(str(exc), type="negative")
@@ -202,6 +221,34 @@ def build_page(
         ui.upload(on_upload=upload, auto_upload=True, label="Choose bank export").props(
             "accept=.csv"
         ).classes("w-full")
+        ui.label("Accepts bank and credit-card exports.")
+
+        def edit_account(account: dict[str, str]) -> None:
+            with ui.dialog() as dialog, ui.card():
+                ui.label("Edit account").classes("text-xl")
+                label = ui.input("Account label", value=account["label"])
+                kind = ui.select(ACCOUNT_KINDS, value=account["kind"], label="Account type")
+                ui.label("Changing the type rechecks repayment matching, not purchase categories.")
+
+                def save() -> None:
+                    update_account(engine, account["id"], label.value or "", kind.value)
+                    accounts_panel.refresh()
+
+                ui.button("Save account", on_click=lambda: perform(save, dialog, "Edit account"))
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+            dialog.on("hide", dialog.delete)
+            dialog.open()
+
+        @ui.refreshable
+        def accounts_panel() -> None:
+            for account in account_rows(engine):
+                with ui.row().classes("items-center"):
+                    ui.label(f"{account['label']} · {ACCOUNT_KINDS[account['kind']]}")
+                    ui.button("Account settings", on_click=lambda a=account: edit_account(a)).props(
+                        "flat"
+                    )
+
+        accounts_panel()
     transaction_filters = FilterState()
     analysis_filters = FilterState()
 
@@ -376,6 +423,34 @@ def build_page(
                 f"Booking {row['booking_date']} · Value {row['value_date']} · "
                 f"{money(row['amount_cents'])} {row['currency']}"
             )
+            ui.label(f"Account: {row['account_label']}")
+            if row["repayment_role"]:
+                ui.label(row["repayment_status"]).classes("font-semibold")
+                ui.label(
+                    "Repayment treatment is separate from categories. Automatic treatment excludes "
+                    "card credits and uniquely matched bank withdrawals, unless a protected "
+                    "category conflicts. Unmatched bank withdrawals stay in totals."
+                )
+                if row["repayment_partner"]:
+                    ui.label("Matched to an opposite entry on the other account.")
+                treatment = ui.select(
+                    TREATMENTS, value=row["repayment_treatment"], label="Repayment treatment"
+                )
+                ui.label(
+                    "Internal transfer explicitly excludes this entry only. It does not change "
+                    "categories or create AI examples. Review the other entry separately if needed."
+                    " Include in totals still respects an Internal transfer category."
+                )
+                ui.button(
+                    "Save repayment treatment",
+                    on_click=lambda: perform(
+                        lambda: review_repayment(
+                            engine, row["id"], treatment.value, expected_revision=row["revision"]
+                        ),
+                        dialog,
+                        "Review repayment",
+                    ),
+                )
             generated = " (AI-generated)" if row["origin_source"] == "ai" else ""
             protection = (
                 "protected manual decision"
@@ -496,6 +571,8 @@ def build_page(
                 ui.label(f"{len(rows):,} matching transactions in the transaction list").classes(
                     "text-sm text-gray-600"
                 )
+                if warning := repayment_warning(rows):
+                    ui.label(warning).classes("text-sm text-amber-800")
                 ui.label(
                     "Click a row to view its full description, correct that transaction, "
                     "or view its history."
@@ -512,11 +589,13 @@ def build_page(
                 table = ui.table(
                     columns=columns(
                         "booking_date",
+                        "account_label",
                         "value_date",
                         "description",
                         "amount",
                         "currency",
                         "category",
+                        "repayment_status",
                         "source_label",
                         "protected",
                         money_columns=("amount",),

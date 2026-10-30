@@ -1,5 +1,5 @@
 # ty: ignore[unsound-assignment]
-"""Schema v2. Amounts are signed integer cents; IDs survive category renames."""
+"""Schema v3. Amounts are signed integer cents; IDs survive category renames."""
 
 # SQLAlchemy infers mapped_column types from Mapped annotations at runtime.
 # Its generic Any return does not express that declarative typing contract.
@@ -86,6 +86,32 @@ class Transaction(Base):
         UniqueConstraint("row_sha256", "occurrence"),
         CheckConstraint("occurrence > 0"),
         CheckConstraint("typeof(amount_cents) = 'integer'"),
+    )
+
+
+class Account(Base):
+    __tablename__ = "accounts"
+    id: Mapped[str] = mapped_column(primary_key=True)
+    label: Mapped[str]
+    kind: Mapped[str] = mapped_column(default="bank")
+    __table_args__ = (CheckConstraint("kind IN ('bank','credit_card')"),)
+
+
+class CardRepayment(Base):
+    """Deterministic settlement metadata, independent of category assignments."""
+
+    __tablename__ = "card_repayments"
+    transaction_id: Mapped[str] = mapped_column(
+        ForeignKey("transactions.id", ondelete="CASCADE"), primary_key=True
+    )
+    role: Mapped[str]
+    partner_id: Mapped[str | None] = mapped_column(
+        ForeignKey("transactions.id", ondelete="SET NULL")
+    )
+    treatment: Mapped[str] = mapped_column(default="auto")
+    __table_args__ = (
+        CheckConstraint("role IN ('bank','credit_card')"),
+        CheckConstraint("treatment IN ('auto','include','exclude')"),
     )
 
 

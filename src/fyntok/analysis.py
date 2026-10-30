@@ -8,6 +8,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import InstrumentedAttribute
 from sqlalchemy.sql.elements import ColumnElement
 
+from .accounts import excluded_repayment
 from .models import Assignment, Category, Transaction
 from .queries import Filters
 
@@ -57,6 +58,7 @@ def aggregate(
         .outerjoin(a, and_(a.transaction_id == t.id, a.active.is_(True)))
         .outerjoin(c, c.id == a.category_id)
         .where(func.coalesce(c.kind, "uncategorized") != "transfer")
+        .where(~excluded_repayment())
     )
     if start is not None:
         query = query.where(t.booking_date >= start)

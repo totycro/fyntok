@@ -25,6 +25,10 @@
 
 # Data and behavior
 
+- Use only anonymized bank and transaction-counterparty names in code, comments, tests,
+  fixtures, and documentation. Do not include real bank names, account/card product names,
+  merchants, payees, or other transaction targets. Use generic labels or synthetic examples;
+  keep parsing rules independent of specific institutions and counterparties.
 - Keep private CSVs, SQLite databases, and credentials out of Git and test fixtures. Use temporary
   databases and mocked AI/auth transports in tests; the private dataset check skips if absent.
 - Store and aggregate money as integer cents; use booking dates for monthly totals.

@@ -15,6 +15,7 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     importer = commands.add_parser("import")
     importer.add_argument("csv", type=Path)
+    importer.add_argument("--account-kind", choices=["bank", "credit_card"])
     analysis = commands.add_parser("analyze")
     analysis.add_argument("--by", choices=["monthly", "trends", "merchant"], default="monthly")
     serve = commands.add_parser("serve", help="Open the manual application")
@@ -52,7 +53,7 @@ def main() -> None:
             )
             return
         result = (
-            asdict(import_csv(engine, args.csv))
+            asdict(import_csv(engine, args.csv, account_kind=args.account_kind))
             if args.command == "import"
             else aggregate(engine, by=args.by)
         )

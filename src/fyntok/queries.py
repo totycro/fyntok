@@ -9,8 +9,9 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Select
 
+from .accounts import excluded_repayment
 from .descriptions import parse_description
-from .models import Assignment, Category, ConfirmedExample, Transaction
+from .models import Account, Assignment, CardRepayment, Category, ConfirmedExample, Transaction
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,12 @@ def transaction_rows(engine: Engine, filters: Filters = DEFAULT_FILTERS) -> list
             t.description,
             t.account,
             t.merchant,
+            func.coalesce(Account.label, "Bank").label("account_label"),
+            func.coalesce(Account.kind, "bank").label("account_kind"),
+            CardRepayment.role.label("repayment_role"),
+            CardRepayment.partner_id.label("repayment_partner"),
+            CardRepayment.treatment.label("repayment_treatment"),
+            excluded_repayment().label("repayment_excluded"),
             t.booking_date,
             t.value_date,
             t.amount_cents,
@@ -108,6 +115,8 @@ def transaction_rows(engine: Engine, filters: Filters = DEFAULT_FILTERS) -> list
             func.coalesce(restored.source, a.source, "unassigned").label("origin_source"),
         )
         .select_from(t)
+        .outerjoin(Account, Account.id == t.account)
+        .outerjoin(CardRepayment, CardRepayment.transaction_id == t.id)
         .outerjoin(a, and_(a.transaction_id == t.id, a.active.is_(True)))
         .outerjoin(c, c.id == a.category_id)
         .outerjoin(restored, restored.id == a.restored_assignment_id)
@@ -118,6 +127,15 @@ def transaction_rows(engine: Engine, filters: Filters = DEFAULT_FILTERS) -> list
             filters.apply(query).order_by(t.booking_date.desc(), t.id)
         ).mappings():
             row = dict(result)
+            row["repayment_status"] = (
+                "Credit-card repayment"
+                if row["repayment_excluded"]
+                else "Included by review"
+                if row["repayment_treatment"] == "include"
+                else "Review needed"
+                if row["repayment_role"]
+                else ""
+            )
             row["cleaned_description"] = parse_description(
                 row["description"], row.pop("account")
             ).cleaned_description

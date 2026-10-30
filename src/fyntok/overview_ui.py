@@ -8,6 +8,7 @@ from typing import Any
 from nicegui import events, ui
 from sqlalchemy.engine import Engine
 
+from .accounts import repayment_warning
 from .analysis_plot import AnalysisPlot
 from .charts import breakdown_figure
 from .insights import (
@@ -72,6 +73,8 @@ def build_overview(
             ).classes("w-40").mark("overview-currency")
         ui.label(f"{period.start:%B %Y} · {state.currency}").classes("text-xl font-semibold")
         report = build_report(engine, Filters(currency=state.currency), period)
+        if warning := repayment_warning(transaction_rows(engine, report.filters)):
+            ui.label(warning).classes("text-sm text-amber-800")
         if state.month not in history:
             ui.label("No recorded activity this month. Import coverage is unknown.")
         elif period.start < first or period.end > min(last, date.today()):
@@ -112,7 +115,7 @@ def build_overview(
                         category_id=category_id,
                     ),
                 )
-                if row["amount_cents"] < 0
+                if row["amount_cents"] < 0 and not row["repayment_excluded"]
             ]
             with ui.dialog() as dialog, ui.card().classes("w-full max-w-5xl"):
                 ui.label("Transactions behind this report").classes("text-xl font-semibold")

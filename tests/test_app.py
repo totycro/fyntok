@@ -458,7 +458,7 @@ def test_ai_ui_proposals_fixed_model_and_recalculation(
 
     caplog.set_level(logging.DEBUG, logger="fyntok")
     engine = open_database(tmp_path / "ai-ui.sqlite3")
-    import_content(engine, b"a;EXAMPLE GROCERY;01.01.2024;01.01.2024;-10,00;EUR\n", "bank.csv")
+    import_content(engine, b"a;Shop;01.01.2024;01.01.2024;-10,00;EUR\n", "bank.csv")
     auth = ChatGPTSession(tmp_path / "credentials")
     with auth.locked():
         data = auth.load()
@@ -584,7 +584,7 @@ def test_ui_cancel_and_recover_after_reload(
     from fyntok.categorization import cancel_run, start_run
 
     engine = open_database(tmp_path / "recover-ui.sqlite3")
-    import_content(engine, b"a;EXAMPLE GROCERY;01.01.2024;01.01.2024;-10,00;EUR\n", "bank.csv")
+    import_content(engine, b"a;Shop;01.01.2024;01.01.2024;-10,00;EUR\n", "bank.csv")
     auth = ChatGPTSession(tmp_path / "credentials")
     run_id = start_run(engine, "saved-model")
 
@@ -654,7 +654,7 @@ def test_ui_cancel_and_recover_after_reload(
 )
 def test_ui_unavailable_model_has_no_fallback(tmp_path: Path, action: str) -> None:
     engine = open_database(tmp_path / "unavailable.sqlite3")
-    import_content(engine, b"a;EXAMPLE GROCERY;01.01.2024;01.01.2024;-10,00;EUR\n", "bank.csv")
+    import_content(engine, b"a;Shop;01.01.2024;01.01.2024;-10,00;EUR\n", "bank.csv")
     calls: list[str] = []
 
     class Unavailable:

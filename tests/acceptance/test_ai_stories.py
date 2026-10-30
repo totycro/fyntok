@@ -125,8 +125,8 @@ def test_one_supermarket_correction_guides_history_without_bulk_editing(
     when I correct one and recalculate history,
     then my decision stays protected and guides the other purchase.
     """
-    household.import_purchase("EXAMPLE GROCERY", day=1)
-    household.import_purchase("EXAMPLE GROCERY", day=2)
+    household.import_purchase("Shop", day=1)
+    household.import_purchase("Shop", day=2)
     household.recalculate_history()
     assert household.purchase(1)["category"] == "Shopping"
     assert household.purchase(2)["category"] == "Shopping"
@@ -147,14 +147,14 @@ def test_my_latest_decision_guides_new_imports_and_repeated_recalculation(
     """When I change my mind, the advisor remembers the latest decision.
     New imports and repeated historical reviews receive that same guidance.
     """
-    household.import_purchase("EXAMPLE GROCERY", day=1)
+    household.import_purchase("Shop", day=1)
     household.confirm(day=1, category=household.shopping)
     household.confirm(day=1, category=household.groceries)
-    household.import_purchase("EXAMPLE GROCERY", day=2)
+    household.import_purchase("Shop", day=2)
 
     household.recalculate_history()
     household.recalculate_history()
-    household.import_purchase("EXAMPLE GROCERY", day=3)
+    household.import_purchase("Shop", day=3)
     household.recalculate_history()
 
     assert all(household.purchase(day)["category"] == "Groceries" for day in (1, 2, 3))
@@ -187,13 +187,13 @@ def test_filtered_recalculation_only_revisits_the_selected_history(household: Ho
     """When I filter to supermarket purchases and recalculate,
     an unrelated pharmacy purchase keeps its previous assignment.
     """
-    household.import_purchase("EXAMPLE GROCERY", day=1)
-    household.import_purchase("EXAMPLE GROCERY", day=2)
-    household.import_purchase("EXAMPLE CARE", day=3)
+    household.import_purchase("Shop", day=1)
+    household.import_purchase("Shop", day=2)
+    household.import_purchase("Pharmacy", day=3)
     household.recalculate_history()
     household.confirm(day=1, category=household.groceries)
 
-    household.recalculate_history(merchant="EXAMPLE GROCERY")
+    household.recalculate_history(merchant="Shop")
 
     assert household.purchase(2)["category"] == "Groceries"
     assert household.purchase(3)["category"] == "Shopping"
@@ -203,7 +203,7 @@ def test_a_decision_made_while_the_advisor_thinks_takes_precedence(household: Ho
     """When I correct a purchase during an AI request,
     the old answer cannot overwrite my new decision.
     """
-    household.import_purchase("EXAMPLE GROCERY", day=1)
+    household.import_purchase("Shop", day=1)
     household.advisor.while_thinking = lambda: household.confirm(
         day=1, category=household.groceries
     )
@@ -221,7 +221,7 @@ def test_changing_a_definition_during_a_request_discards_the_old_answer(
     """When I update what Groceries means while categorization is running,
     results based on the previous definitions are excluded.
     """
-    household.import_purchase("EXAMPLE GROCERY", day=1)
+    household.import_purchase("Shop", day=1)
     household.advisor.while_thinking = lambda: save_category(
         household.engine,
         "Groceries",
@@ -239,8 +239,8 @@ def test_ai_reassignment_can_be_undone_to_the_previous_suggestion(household: Hou
     """After a correction guides historical recalculation,
     I can undo another purchase's AI change and inspect its history.
     """
-    household.import_purchase("EXAMPLE GROCERY", day=1)
-    household.import_purchase("EXAMPLE GROCERY", day=2)
+    household.import_purchase("Shop", day=1)
+    household.import_purchase("Shop", day=2)
     household.recalculate_history()
     household.confirm(day=1, category=household.groceries)
     household.recalculate_history()
@@ -276,7 +276,7 @@ def test_an_ai_problem_leaves_imports_and_manual_review_available(
     """If my plan is unavailable or the advisor invents a category,
     my bank data stays intact and I can still categorize purchases myself.
     """
-    household.import_purchase("EXAMPLE GROCERY", day=1)
+    household.import_purchase("Shop", day=1)
     setattr(household.advisor, problem, True)
 
     result = household.recalculate_history()
@@ -291,7 +291,7 @@ def test_the_next_review_uses_my_updated_category_definition(household: Househol
     """When I narrow a category's definition and start another review,
     the advisor receives the saved wording for that review.
     """
-    household.import_purchase("EXAMPLE GROCERY", day=1)
+    household.import_purchase("Shop", day=1)
     household.recalculate_history()
     new_definition = "Food bought for home cooking; exclude household supplies"
     save_category(household.engine, "Groceries", new_definition, category_id=household.groceries)

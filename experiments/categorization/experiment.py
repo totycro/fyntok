@@ -99,6 +99,7 @@ def prepare(csv_path: Path, out: Path) -> dict[str, Any]:
             )
     selected = []
     example = None
+    # Preparation expects an anonymized CSV with these synthetic counterparties.
     for merchant, count in [("EXAMPLE GROCERY", 4), ("EXAMPLE FOODS", 1), ("EXAMPLE CARE", 3)]:
         matches = [
             row for row in rows if re.search(r"\b" + merchant + r"\b", row["description"], re.I)

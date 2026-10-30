@@ -24,8 +24,10 @@ from fyntok.models import RunItem
 
 def test_related_examples_are_ranked_before_recent_unrelated_examples() -> None:
     unrelated = [{"description": "Unrelated pharmacy", "category_id": "care"} for _ in range(50)]
-    supermarket = {"description": "EXAMPLE GROCERY Berlin", "category_id": "food"}
-    selected = relevant_examples([*unrelated, supermarket], [{"description": "EXAMPLE GROCERY Hamburg"}])
+    supermarket = {"description": "Example Grocery Berlin", "category_id": "food"}
+    selected = relevant_examples(
+        [*unrelated, supermarket], [{"description": "Example Grocery Hamburg"}]
+    )
     assert selected[0] == supermarket and len(selected) == 40
 
 
@@ -128,7 +130,7 @@ def test_subscription_transport_requires_a_completed_stream(
     client = ResponsesClient(Login(), trace_dir=trace_dir if tracing else None)
     request_result = client.propose if operation == "propose" else client.classify
     payload = (
-        {"categories": [], "descriptions": ["EXAMPLE GROCERY"]}
+        {"categories": [], "descriptions": ["Example Grocery"]}
         if operation == "propose"
         else {"categories": [], "confirmed_examples": [], "transactions": []}
     )
@@ -221,7 +223,7 @@ def test_completed_batches_survive_a_later_failure_and_reopening(
     engine = open_database(path)
     import_content(
         engine,
-        b"a;EXAMPLE GROCERY;01.01.2024;01.01.2024;-10,00;EUR\na;EXAMPLE CARE;02.01.2024;02.01.2024;20,00;EUR\n",
+        b"a;Shop;01.01.2024;01.01.2024;-10,00;EUR\na;Pharmacy;02.01.2024;02.01.2024;20,00;EUR\n",
         "bank.csv",
     )
 
@@ -234,7 +236,8 @@ def test_completed_batches_survive_a_later_failure_and_reopening(
             target = payload["transactions"][0]
             assert "booking_date" not in target
             assert "value_date" not in target
-            assert target["amount_cents"] == {"EXAMPLE GROCERY": -1000, "EXAMPLE CARE": 2000}[target["description"]]
+            expected_amounts = {"Shop": -1000, "Pharmacy": 2000}
+            assert target["amount_cents"] == expected_amounts[target["description"]]
             if self.calls == 2:
                 raise RuntimeError("Disconnected")
             return {

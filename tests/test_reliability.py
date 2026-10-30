@@ -45,7 +45,7 @@ def bank(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
     engine = open_database(tmp_path / "reliability.sqlite3")
     import_content(
         engine,
-        b"a;EXAMPLE GROCERY;01.01.2024;01.01.2024;-10,00;EUR\na;EXAMPLE CARE;02.01.2024;02.01.2024;-20,00;EUR\n",
+        b"a;Shop;01.01.2024;01.01.2024;-10,00;EUR\na;Pharmacy;02.01.2024;02.01.2024;-20,00;EUR\n",
         "bank.csv",
     )
     yield engine

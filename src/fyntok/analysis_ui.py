@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 from nicegui import events, ui
 from sqlalchemy.engine import Engine
 
+from .accounts import repayment_warning
 from .analysis_plot import AnalysisPlot
 from .charts import breakdown_figure, cashflow_figure, spending_heatmap
 from .date_ui import iso_date_input
@@ -214,6 +215,8 @@ def build_analysis(
             selected,
             year_ago=state.comparison == "Same period last year",
         )
+        if warning := repayment_warning(transaction_rows(engine, report.filters)):
+            ui.label(warning).classes("text-sm text-amber-800")
         if not report.totals["outgoing_cents"] and not report.totals["incoming_cents"]:
             ui.label("No financial activity matches these filters in this period.")
         with (
@@ -280,6 +283,7 @@ def build_analysis(
                 row
                 for row in transaction_rows(engine, selection)
                 if kinds.get(row["category_id"], "uncategorized") != "transfer"
+                and not row["repayment_excluded"]
             ]
             if spending_only or "category_id" in metadata or "merchant" in metadata:
                 rows = [row for row in rows if row["amount_cents"] < 0]
@@ -589,6 +593,7 @@ def build_analysis(
                     for row in transaction_rows(engine, report.filters)
                     if row["amount_cents"] < 0
                     and kinds.get(row["category_id"], "uncategorized") != "transfer"
+                    and not row["repayment_excluded"]
                 ],
                 key=lambda row: row["amount_cents"],
             )[:10]

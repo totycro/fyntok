@@ -16,7 +16,7 @@ def update_merchants(database: Path, *, dry_run: bool = False) -> tuple[int, int
     backup = None
     with closing(sqlite3.connect(f"{path.as_uri()}?mode={mode}", uri=True)) as db:
         versions = db.execute("SELECT version FROM schema_version").fetchall()
-        if versions not in ([(1,)], [(2,)]):
+        if versions not in ([(1,)], [(2,)], [(3,)]):
             raise ValueError("Unsupported database schema version")
         if not dry_run:
             timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
