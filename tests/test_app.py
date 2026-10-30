@@ -895,9 +895,12 @@ def test_categorization_uses_applied_transaction_filters(
     seen.clear()
     import_content(
         engine,
-        b"a;Shop New;03.03.2024;03.03.2024;-10,00;EUR\n",
+        b"a;Shop New;03.03.2024;03.03.2024;-10,00;EUR\n"
+        b"a;Shop Manual;04.03.2024;04.03.2024;-12,00;EUR\n",
         "synthetic.csv",
     )
+    manual_id = transaction_rows(engine, Filters(search="Shop Manual"))[0]["id"]
+    correct_transaction(engine, manual_id, "uncategorized")
     finished = threading.Event()
 
     def execute_and_signal(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -915,7 +918,7 @@ def test_categorization_uses_applied_transaction_filters(
             user.find(kind=ui.tab, content="Transactions").click()
             user.find("Description contains").type("Shop")
             user.find("Apply filters").click()
-            await user.should_see("2 matching transactions")
+            await user.should_see("3 matching transactions")
             # A draft edit must not change the categorization selection.
             user.find("Description contains").clear().type("Other")
             user.find(kind=ui.tab, content="Analysis").click()
@@ -923,11 +926,21 @@ def test_categorization_uses_applied_transaction_filters(
             user.find("Apply analysis filters").click()
             await user.should_see("No matching history.")
             user.find(kind=ui.button, content="Categorize").click()
+            await user.should_see(
+                "Recalculate categories — all transactions (3 transactions)", retries=30
+            )
+            await user.should_see(
+                "Recalculate categories — Transactions filters (2 transactions)", retries=30
+            )
             checkbox = user.find(kind=ui.checkbox, content="Only uncategorized").elements.pop()
             assert isinstance(checkbox, ui.checkbox)
             assert checkbox.value is False
             if only_uncategorized:
                 user.find("Only uncategorized").click()
+                await user.should_see("Recalculate categories — all transactions (2 transactions)")
+                await user.should_see(
+                    "Recalculate categories — Transactions filters (1 transaction)"
+                )
             action = (
                 "Recalculate categories — Transactions filters"
                 if filtered
@@ -947,12 +960,21 @@ def test_categorization_uses_applied_transaction_filters(
             assert rows["Shop"]["source"] == "ai"
             assert rows["Shop New"]["source"] == "ai"
             assert rows["Other"]["source"] == ("unassigned" if filtered else "ai")
+            assert rows["Shop Manual"]["source"] == "manual"
+            if only_uncategorized:
+                remaining = "1 transaction" if filtered else "0 transactions"
+                await user.should_see(
+                    f"Recalculate categories — all transactions ({remaining})", retries=30
+                )
+                await user.should_see(
+                    "Recalculate categories — Transactions filters (0 transactions)", retries=30
+                )
             user.find(marker="close-data-tools").click()
             user.find(kind=ui.tab, content="Transactions").click()
             draft = user.find("Description contains").elements.pop()
             assert isinstance(draft, ui.input)
             assert draft.value == "Other"
-            await user.should_see("2 matching transactions")
+            await user.should_see("3 matching transactions")
 
     try:
         asyncio.run(scenario())

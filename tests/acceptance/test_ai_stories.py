@@ -4,15 +4,18 @@ Run with: uv run --locked pytest tests/acceptance -v
 """
 
 from collections.abc import Callable, Iterator
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from fyntok.categorization import (
     approve_proposal,
+    categorization_count,
     execute_run,
     propose_categories,
     resume_run,
@@ -27,7 +30,7 @@ from fyntok.manual import (
     save_category,
     undo_assignment,
 )
-from fyntok.models import CategorizationRun
+from fyntok.models import CategorizationRun, RunItem
 from fyntok.queries import Filters, transaction_rows
 
 
@@ -207,6 +210,56 @@ def test_filtered_recalculation_only_revisits_the_selected_history(household: Ho
     assert household.purchase(3)["category"] == "Shopping"
 
 
+@pytest.mark.parametrize("only_uncategorized", [False, True])
+@pytest.mark.parametrize(
+    "scope,all_count,uncategorized_count",
+    [
+        (Filters(), 3, 2),
+        (Filters(search="Shop"), 2, 1),
+        (Filters(category_id="uncategorized"), 2, 2),
+        (Filters(source="manual"), 0, 0),
+        (Filters(source="ai"), 1, 0),
+        (Filters(currency="USD"), 0, 0),
+        (Filters(end=date(2024, 1, 1)), 1, 0),
+        (Filters(merchant="Other"), 1, 1),
+    ],
+)
+def test_categorization_preview_counts_only_pending_work(
+    household: Household,
+    scope: Filters,
+    all_count: int,
+    uncategorized_count: int,
+    only_uncategorized: bool,
+) -> None:
+    household.import_purchase("Shop", day=1)
+    household.import_purchase("Protected", day=2)
+    household.recalculate_history()
+    household.confirm(day=2, category=household.groceries)
+    household.confirm(day=2, category=household.shopping)
+    household.undo(day=2)
+    assert household.purchase(2)["source"] == "undo"
+    assert household.purchase(2)["protected"]
+    household.import_purchase("Shop", day=3)
+    household.import_purchase("Other", day=4)
+    household.import_purchase("Manual", day=5)
+    household.confirm(day=5, category="uncategorized")
+    expected = uncategorized_count if only_uncategorized else all_count
+    assert (
+        categorization_count(household.engine, scope, only_uncategorized=only_uncategorized)
+        == expected
+    )
+    run_id = start_run(
+        household.engine, "story-advisor", scope, only_uncategorized=only_uncategorized
+    )
+    with Session(household.engine) as session:
+        pending = list(
+            session.scalars(
+                select(RunItem).where(RunItem.run_id == run_id, RunItem.status == "pending")
+            )
+        )
+    assert len(pending) == expected
+
+
 @pytest.mark.parametrize("filtered", [False, True])
 def test_only_uncategorized_preserves_existing_categories_and_resume_scope(
     household: Household, filtered: bool
@@ -261,9 +314,11 @@ def test_only_uncategorized_retries_ai_uncategorized_and_handles_empty_scope(
 
     execute_run(household.engine, UncertainAdvisor(), run_id)
     assert household.purchase(1)["source"] == "ai"
+    assert categorization_count(household.engine, only_uncategorized=True) == 1
     run_id = start_run(household.engine, "story-advisor", only_uncategorized=True)
     assert execute_run(household.engine, household.advisor, run_id)["applied"] == 1
     household.advisor.requests.clear()
+    assert categorization_count(household.engine, only_uncategorized=True) == 0
     run_id = start_run(household.engine, "story-advisor", only_uncategorized=True)
     result = execute_run(household.engine, household.advisor, run_id)
     assert result["status"] == "completed" and result["applied"] == 0

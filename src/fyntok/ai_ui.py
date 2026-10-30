@@ -14,6 +14,7 @@ from .auth import ChatGPTSession
 from .categorization import (
     approve_proposal,
     cancel_run,
+    categorization_count,
     execute_run,
     propose_categories,
     resume_run,
@@ -402,12 +403,29 @@ def build_ai_panel(
 
         with actions:
             ui.button("Propose categories", on_click=propose)
-            ui.button(
+            all_button = ui.button(
                 "Recalculate categories — all transactions", on_click=lambda: recalculate(False)
             )
-            ui.button(
+            filtered_button = ui.button(
                 "Recalculate categories — Transactions filters", on_click=lambda: recalculate(True)
             ).props("outline")
+
+        def refresh_counts() -> None:
+            for button, scope, label in [
+                (all_button, Filters(), "all transactions"),
+                (filtered_button, filters(), "Transactions filters"),
+            ]:
+                count = categorization_count(
+                    engine, scope, only_uncategorized=only_uncategorized.value
+                )
+                noun = "transaction" if count == 1 else "transactions"
+                text = f"Recalculate categories — {label} ({count} {noun})"
+                if button.text != text:
+                    button.set_text(text)
+
+        only_uncategorized.on_value_change(refresh_counts)
+        refresh_counts()
+        ui.timer(0.5, refresh_counts)
         with run_settings, ui.row():
             ui.button("Cancel selected run", on_click=cancel).props("outline")
             ui.button("Resume / recover selected run", on_click=resume).props("outline")

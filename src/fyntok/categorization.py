@@ -11,7 +11,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -20,7 +20,7 @@ from .database import UNCATEGORIZED_ID, require_record
 from .descriptions import parse_description
 from .llm_traces import trace_batch
 from .manual import _active, _assign, categories, save_category
-from .models import CategorizationRun, Category, ConfirmedExample, RunItem, Transaction
+from .models import Assignment, CategorizationRun, Category, ConfirmedExample, RunItem, Transaction
 from .queries import Filters, transaction_rows
 
 DEFAULT_FILTERS = Filters()
@@ -117,6 +117,30 @@ def propose_categories(engine: Engine, client: Proposer, model: str) -> list[dic
 def approve_proposal(engine: Engine, proposal: dict[str, Any]) -> str:
     validate_proposals({"categories": [proposal]})
     return save_category(engine, proposal["name"], proposal["definition"], proposal["kind"])
+
+
+def categorization_count(
+    engine: Engine,
+    filters: Filters = DEFAULT_FILTERS,
+    *,
+    only_uncategorized: bool = False,
+) -> int:
+    """Preview eligible work without loading transaction descriptions or creating a run."""
+    t, a, c = Transaction, Assignment, Category
+    query = (
+        select(func.count())
+        .select_from(t)
+        .outerjoin(a, and_(a.transaction_id == t.id, a.active.is_(True)))
+        .outerjoin(c, c.id == a.category_id)
+        .where(
+            func.coalesce(a.protected, False).is_(False),
+            func.coalesce(a.source, "unassigned") != "manual",
+        )
+    )
+    if only_uncategorized:
+        query = query.where(func.coalesce(c.id, UNCATEGORIZED_ID) == UNCATEGORIZED_ID)
+    with engine.connect() as connection:
+        return connection.execute(filters.apply(query)).scalar_one()
 
 
 def start_run(
