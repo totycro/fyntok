@@ -16,7 +16,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from .ai import AIRequestError, Classifier, Proposer
-from .database import require_record
+from .database import UNCATEGORIZED_ID, require_record
 from .descriptions import parse_description
 from .llm_traces import trace_batch
 from .manual import _active, _assign, categories, save_category
@@ -119,7 +119,13 @@ def approve_proposal(engine: Engine, proposal: dict[str, Any]) -> str:
     return save_category(engine, proposal["name"], proposal["definition"], proposal["kind"])
 
 
-def start_run(engine: Engine, model: str, filters: Filters = DEFAULT_FILTERS) -> str:
+def start_run(
+    engine: Engine,
+    model: str,
+    filters: Filters = DEFAULT_FILTERS,
+    *,
+    only_uncategorized: bool = False,
+) -> str:
     if not model:
         raise ValueError("A model identifier is required.")
     with Session(engine) as session, session.begin():
@@ -135,6 +141,7 @@ def start_run(engine: Engine, model: str, filters: Filters = DEFAULT_FILTERS) ->
         scope = {
             k: v.isoformat() if hasattr(v, "isoformat") else v for k, v in asdict(filters).items()
         }
+        scope["only_uncategorized"] = only_uncategorized
         rows = transaction_rows(engine, filters)
         snapshot = category_context(engine)
         run = CategorizationRun(
@@ -146,6 +153,8 @@ def start_run(engine: Engine, model: str, filters: Filters = DEFAULT_FILTERS) ->
         session.add(run)
         session.flush()
         for row in rows:
+            if only_uncategorized and row["category_id"] != UNCATEGORIZED_ID:
+                continue
             session.add(
                 RunItem(
                     run_id=run.id,

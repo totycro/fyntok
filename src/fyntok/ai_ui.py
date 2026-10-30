@@ -55,6 +55,7 @@ def build_ai_panel(
         )
         connection = ui.label()
         status = ui.label().props("role=status aria-live=polite")
+        only_uncategorized = ui.checkbox("Only uncategorized", value=False)
         actions = ui.row().classes("w-full")
         progress = ui.linear_progress(value=0).classes("w-full")
         progress.set_visibility(False)
@@ -380,7 +381,9 @@ def build_ai_panel(
             try:
                 await prepare_account()
                 scope = filters() if filtered else Filters()
-                state["run_id"] = start_run(engine, AI_MODEL, scope)
+                state["run_id"] = start_run(
+                    engine, AI_MODEL, scope, only_uncategorized=only_uncategorized.value
+                )
                 logger.debug("%s: saved run; starting background categorization", action)
                 state["running"] = True
                 poll()

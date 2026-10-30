@@ -16,6 +16,7 @@ from fyntok.ai import AI_MODEL, AIRequestError
 from fyntok.analysis_plot import AnalysisPlot
 from fyntok.app import build_page
 from fyntok.auth import PERMISSION, ChatGPTSession
+from fyntok.categorization import execute_run, start_run
 from fyntok.database import open_database
 from fyntok.importer import import_content
 from fyntok.manual import categories, correct_transaction, save_category
@@ -857,7 +858,11 @@ def test_manual_examples_ui(tmp_path: Path, replace_before_delete: bool) -> None
         engine.dispose()
 
 
-def test_categorization_uses_applied_transaction_filters(tmp_path: Path) -> None:
+@pytest.mark.parametrize("only_uncategorized", [False, True])
+@pytest.mark.parametrize("filtered", [False, True])
+def test_categorization_uses_applied_transaction_filters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, only_uncategorized: bool, filtered: bool
+) -> None:
     engine = open_database(tmp_path / "local-filters.sqlite3")
     import_content(
         engine,
@@ -865,6 +870,7 @@ def test_categorization_uses_applied_transaction_filters(tmp_path: Path) -> None
         "synthetic.csv",
     )
     seen: list[str] = []
+    food = save_category(engine, "Food", "Food purchases")
 
     class Advisor:
         def propose(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -878,12 +884,28 @@ def test_categorization_uses_applied_transaction_filters(tmp_path: Path) -> None
                 "assignments": [
                     {
                         "transaction_id": t["transaction_id"],
-                        "category_id": "uncategorized",
+                        "category_id": food,
                         "reason": "Unclear",
                     }
                     for t in payload["transactions"]
                 ]
             }
+
+    execute_run(engine, Advisor(), start_run(engine, "test-model", Filters(search="Shop")))
+    seen.clear()
+    import_content(
+        engine,
+        b"a;Shop New;03.03.2024;03.03.2024;-10,00;EUR\n",
+        "synthetic.csv",
+    )
+    finished = threading.Event()
+
+    def execute_and_signal(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        result = execute_run(*args, **kwargs)
+        finished.set()
+        return result
+
+    monkeypatch.setattr("fyntok.ai_ui.execute_run", execute_and_signal)
 
     async def scenario() -> None:
         async with user_simulation(
@@ -893,7 +915,7 @@ def test_categorization_uses_applied_transaction_filters(tmp_path: Path) -> None
             user.find(kind=ui.tab, content="Transactions").click()
             user.find("Description contains").type("Shop")
             user.find("Apply filters").click()
-            await user.should_see("1 matching transactions")
+            await user.should_see("2 matching transactions")
             # A draft edit must not change the categorization selection.
             user.find("Description contains").clear().type("Other")
             user.find(kind=ui.tab, content="Analysis").click()
@@ -901,18 +923,36 @@ def test_categorization_uses_applied_transaction_filters(tmp_path: Path) -> None
             user.find("Apply analysis filters").click()
             await user.should_see("No matching history.")
             user.find(kind=ui.button, content="Categorize").click()
-            user.find("Recalculate categories — Transactions filters").click()
-            await user.should_see("Completed: 1 applied")
-            assert seen == ["Shop"]
+            checkbox = user.find(kind=ui.checkbox, content="Only uncategorized").elements.pop()
+            assert isinstance(checkbox, ui.checkbox)
+            assert checkbox.value is False
+            if only_uncategorized:
+                user.find("Only uncategorized").click()
+            action = (
+                "Recalculate categories — Transactions filters"
+                if filtered
+                else "Recalculate categories — all transactions"
+            )
+            user.find(action).click()
+            expected = {"Shop New"}
+            if not only_uncategorized:
+                expected.add("Shop")
+            if not filtered:
+                expected.add("Other")
+            # The previous run can have the same completion summary; wait for the new work.
+            assert await asyncio.to_thread(finished.wait, 5)
+            await user.should_see(f"Completed: {len(expected)} applied")
+            assert set(seen) == expected
             rows = {r["description"]: r for r in transaction_rows(engine)}
             assert rows["Shop"]["source"] == "ai"
-            assert rows["Other"]["source"] == "unassigned"
+            assert rows["Shop New"]["source"] == "ai"
+            assert rows["Other"]["source"] == ("unassigned" if filtered else "ai")
             user.find(marker="close-data-tools").click()
             user.find(kind=ui.tab, content="Transactions").click()
             draft = user.find("Description contains").elements.pop()
             assert isinstance(draft, ui.input)
             assert draft.value == "Other"
-            await user.should_see("1 matching transactions")
+            await user.should_see("2 matching transactions")
 
     try:
         asyncio.run(scenario())

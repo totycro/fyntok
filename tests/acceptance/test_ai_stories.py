@@ -9,8 +9,15 @@ from typing import Any
 
 import pytest
 from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 
-from fyntok.categorization import approve_proposal, execute_run, propose_categories, start_run
+from fyntok.categorization import (
+    approve_proposal,
+    execute_run,
+    propose_categories,
+    resume_run,
+    start_run,
+)
 from fyntok.database import open_database
 from fyntok.importer import import_content
 from fyntok.manual import (
@@ -20,6 +27,7 @@ from fyntok.manual import (
     save_category,
     undo_assignment,
 )
+from fyntok.models import CategorizationRun
 from fyntok.queries import Filters, transaction_rows
 
 
@@ -197,6 +205,69 @@ def test_filtered_recalculation_only_revisits_the_selected_history(household: Ho
 
     assert household.purchase(2)["category"] == "Groceries"
     assert household.purchase(3)["category"] == "Shopping"
+
+
+@pytest.mark.parametrize("filtered", [False, True])
+def test_only_uncategorized_preserves_existing_categories_and_resume_scope(
+    household: Household, filtered: bool
+) -> None:
+    household.import_purchase("Shop", day=1)
+    household.recalculate_history()
+    household.import_purchase("Shop", day=2)
+    household.import_purchase("Other", day=3)
+    household.import_purchase("Shop Manual", day=4)
+    household.confirm(day=4, category="uncategorized")
+    before = assignment_history(household.engine, household.purchase(1)["id"])
+    household.advisor.requests.clear()
+    scope = Filters(search="Shop") if filtered else Filters()
+    run_id = start_run(household.engine, "story-advisor", scope, only_uncategorized=True)
+    with Session(household.engine) as session:
+        saved = session.get(CategorizationRun, run_id)
+        assert saved is not None
+        assert saved.scope["only_uncategorized"] is True
+        assert saved.scope["search"] == scope.search
+    # Recovering the run must keep its original selection, even after another import.
+    household.import_purchase("Shop", day=5)
+    result = resume_run(household.engine, household.advisor, run_id)
+
+    assert result["applied"] == (1 if filtered else 2)
+    assert result["skipped"] == 1
+    assert assignment_history(household.engine, household.purchase(1)["id"]) == before
+    assert household.purchase(2)["category"] == "Shopping"
+    assert household.purchase(3)["category"] == ("Uncategorized" if filtered else "Shopping")
+    assert household.purchase(4)["source"] == "manual"
+    assert household.purchase(5)["source"] == "unassigned"
+
+
+def test_only_uncategorized_retries_ai_uncategorized_and_handles_empty_scope(
+    household: Household,
+) -> None:
+    household.import_purchase("Shop", day=1)
+    run_id = start_run(household.engine, "story-advisor")
+
+    class UncertainAdvisor:
+        def classify(self, model: str, payload: dict[str, Any]) -> dict[str, Any]:
+            del model
+            return {
+                "assignments": [
+                    {
+                        "transaction_id": t["transaction_id"],
+                        "category_id": "uncategorized",
+                        "reason": "Unclear",
+                    }
+                    for t in payload["transactions"]
+                ]
+            }
+
+    execute_run(household.engine, UncertainAdvisor(), run_id)
+    assert household.purchase(1)["source"] == "ai"
+    run_id = start_run(household.engine, "story-advisor", only_uncategorized=True)
+    assert execute_run(household.engine, household.advisor, run_id)["applied"] == 1
+    household.advisor.requests.clear()
+    run_id = start_run(household.engine, "story-advisor", only_uncategorized=True)
+    result = execute_run(household.engine, household.advisor, run_id)
+    assert result["status"] == "completed" and result["applied"] == 0
+    assert household.advisor.requests == []
 
 
 def test_a_decision_made_while_the_advisor_thinks_takes_precedence(household: Household) -> None:
