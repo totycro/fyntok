@@ -38,23 +38,34 @@ remain available; archived runs are never imported automatically.
 
 ## Prepare and run a benchmark
 
-### Compare example placement
+### Define experiments with configuration files
 
-Use the same frozen reviewed dataset to compare the current top-level example
-list against examples nested inside each category:
+Experiments live under `experiments/`, separate from the shared runner and
+production code. A JSON config defines `defaults`, a nonempty `variants` list,
+and optionally a Python `provider` path relative to the config. Each variant
+overrides the defaults. Give variants a `label`; mark the comparison baseline
+with `baseline: true` and other variants with `baseline: false`.
+
+For example, compare top-level examples against category-nested examples:
 
 ```bash
-just experiment-run --compare-example-layouts
+just experiment-run --config experiments/categorization/experiments/example-placement/experiment.json
 ```
 
-This opt-in matrix runs both layouts three times, with identical selected examples,
-transaction batches, instructions, and output schema. Nested examples omit the
-redundant category name; categories without examples contain an empty list.
-The default single-variant pilot and production requests are unchanged.
-For 41 test transactions this makes 12 live inference requests. Saved metadata,
-request traces, and Promptfoo columns identify the layout. Reports compare each
-nested run against the flat run from the same repetition, including paired
-improvements/regressions, token usage, and cross-repetition consistency.
+The [example-placement experiment](experiments/example-placement/README.md)
+contains its own config and payload transformation. New experiments need only a
+config and, when necessary, a local provider exposing Promptfoo's `call_api`.
+Providers can reuse `provider_response(..., transform=...)` for shared transport,
+validation, scoring, traces, and token accounting. The transform receives only
+the outgoing payload, never expected labels or review notes. No new CLI flag or
+`justfile` recipe is needed per experiment.
+
+The generic runner retains seeded scheduling, three live repetitions, reports,
+and viewer imports. Run directory names include a configuration hash to keep
+variants distinct. The original config and provider source are saved alongside
+the frozen dataset and manifest. Python providers are trusted local code; review
+them before running. Sharing and telemetry remain disabled. Without `--config`,
+the existing single-variant pilot is unchanged. Production requests are unaffected.
 
 Prepare a private benchmark:
 

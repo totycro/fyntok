@@ -13,6 +13,9 @@ def configuration_key(config: dict[str, Any]) -> str:
 
 
 def variant_label(config: dict[str, Any]) -> str:
+    if "label" in config:
+        return f"{config['model']} · {config['label']}"
+    # Preserve the readable labels on saved experiments predating config files.
     if "example_layout" in config:
         return f"{config['model']} · {config['example_layout']} examples"
     return str(config["model"])

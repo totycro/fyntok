@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 from time import monotonic
@@ -379,14 +380,17 @@ def batches_for(dataset: dict[str, Any], grouped: bool, size: int = 25) -> list[
     return [targets[i : i + size] for i in range(0, len(targets), size)]
 
 
-def evaluate(client: Requester, dataset: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+def evaluate(
+    client: Requester,
+    dataset: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     validate_transaction_context(dataset)
     validate_examples(dataset)
     categories = dataset["categories"]
     name_only = config.get("category_format") == "name-only-v1"
-    example_layout = config.get("example_layout", "flat")
-    if example_layout not in {"flat", "nested"} or (example_layout == "nested" and not name_only):
-        raise ValueError("Example layout must be flat or nested; nesting requires name-only-v1.")
     references = {c["id"]: c["name"] if config["category_names"] else c["id"] for c in categories}
     reverse = {reference: cid for cid, reference in references.items()}
     wire_categories = [{**c, "id": references[c["id"]]} for c in categories]
@@ -421,21 +425,8 @@ def evaluate(client: Requester, dataset: dict[str, Any], config: dict[str, Any])
         try:
             named = named_classification(payload, short_refs=False) if name_only else None
             request_payload = named.payload if named else payload
-            if example_layout == "nested":
-                request_payload = {
-                    "categories": [
-                        {
-                            **category,
-                            "confirmed_examples": [
-                                {k: v for k, v in example.items() if k != "category_name"}
-                                for example in request_payload["confirmed_examples"]
-                                if example["category_name"] == category["name"]
-                            ],
-                        }
-                        for category in request_payload["categories"]
-                    ],
-                    "transactions": request_payload["transactions"],
-                }
+            if transform is not None:
+                request_payload = transform(request_payload)
             output = client.request(
                 config["model"],
                 request_payload,
@@ -540,7 +531,11 @@ class OfflineClient:
 
 
 def provider_response(
-    prompt: str, options: dict[str, Any], context: dict[str, Any]
+    prompt: str,
+    options: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     del prompt, context
     config = options["config"]
@@ -554,7 +549,7 @@ def provider_response(
         if config.get("offline")
         else ResponsesClient(ChatGPTSession(), trace_dir=directory / "traces")
     )
-    result = evaluate(client, dataset, config["variant"])
+    result = evaluate(client, dataset, config["variant"], transform=transform)
     usage = [
         json.loads(p.read_text()).get("usage")
         for p in (directory / "traces").glob("*/metadata.json")
@@ -593,10 +588,8 @@ def get_assert(output: str, context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def variants(
-    models: tuple[str, ...] = MODELS, *, compare_example_layouts: bool = False
-) -> list[dict[str, Any]]:
-    baseline = [
+def variants(models: tuple[str, ...] = MODELS) -> list[dict[str, Any]]:
+    return [
         {
             "model": model,
             "category_names": True,
@@ -607,13 +600,34 @@ def variants(
         }
         for model in models
     ]
-    if compare_example_layouts:
-        return [
-            {**config, "example_layout": layout}
-            for config in baseline
-            for layout in ("flat", "nested")
-        ]
-    return baseline
+
+
+def load_experiment(path: Path) -> tuple[list[dict[str, Any]], Path]:
+    """Load a local matrix and resolve its provider relative to the configuration."""
+    config = json.loads(path.read_text())
+    defaults = config.get("defaults", {})
+    matrix = config.get("variants")
+    if (
+        not isinstance(defaults, dict)
+        or not isinstance(matrix, list)
+        or not matrix
+        or any(not isinstance(variant, dict) for variant in matrix)
+    ):
+        raise ValueError("Experiment requires defaults and a nonempty list of variant objects.")
+    matrix = [{**defaults, **variant} for variant in matrix]
+    required = set(variants()[0])
+    if any(not required <= variant.keys() for variant in matrix):
+        raise ValueError(f"Each experiment variant needs these fields: {sorted(required)}")
+    if len({content_hash(variant) for variant in matrix}) != len(matrix):
+        raise ValueError("Experiment variants must be distinct.")
+    provider = (
+        (path.parent / config["provider"]).resolve()
+        if "provider" in config
+        else TOOLS / "provider.py"
+    )
+    if not provider.is_file():
+        raise ValueError(f"Experiment provider does not exist: {provider}")
+    return matrix, provider
 
 
 def run_pilot(
@@ -621,13 +635,15 @@ def run_pilot(
     output: Path,
     *,
     offline: bool = False,
-    compare_example_layouts: bool = False,
+    experiment: Path | None = None,
 ) -> None:
     dataset = load_dataset(dataset_path)
     if dataset.get("offline_only") and not offline:
         raise ValueError("This scripted fixture is for offline integration checks only.")
     validate_transaction_context(dataset)
-    matrix = variants(compare_example_layouts=compare_example_layouts)
+    matrix, provider = (
+        load_experiment(experiment) if experiment else (variants(), TOOLS / "provider.py")
+    )
     request_count = sum(len(batches_for(dataset, c["grouped"])) for c in matrix) * (
         1 if offline else 3
     )
@@ -647,7 +663,7 @@ def run_pilot(
                 for m in response.json().get("models", [])
                 if m.get("visibility") == "list"
             }
-        if missing := set(MODELS) - available:
+        if missing := {variant["model"] for variant in matrix} - available:
             raise ValueError(f"Required models unavailable: {sorted(missing)}")
     output.mkdir(parents=True, exist_ok=False)
     git = shutil.which("git")
@@ -657,6 +673,9 @@ def run_pilot(
         [git, "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True
     ).stdout.strip()
     write_json(output / "dataset.json", dataset)
+    if experiment is not None:
+        write_json(output / "experiment.json", json.loads(experiment.read_text()))
+        (output / "provider.py").write_text(provider.read_text())
     write_json(
         output / "manifest.json",
         {
@@ -676,6 +695,7 @@ def run_pilot(
             "requests": request_count,
             "repetitions": 1 if offline else 3,
             "variants": matrix,
+            "provider": str(provider),
         },
     )
     env = {
@@ -694,7 +714,7 @@ def run_pilot(
                 f"-short{int(variant['short_refs'])}-group{int(variant['grouped'])}"
                 f"-amount1-date{int(variant['booking_date'])}"
                 f"-{variant['category_format']}"
-                + (f"-examples-{variant['example_layout']}" if "example_layout" in variant else "")
+                + (f"-{content_hash(variant)[:12]}" if experiment is not None else "")
                 + f"-r{repetition + 1}"
             )
             config = {
@@ -702,7 +722,7 @@ def run_pilot(
                 "prompts": ["Categorization benchmark"],
                 "providers": [
                     {
-                        "id": f"file://{TOOLS / 'provider.py'}",
+                        "id": f"file://{provider}",
                         "label": run_label(key, variant),
                         "config": {
                             "dataset": str((output / "dataset.json").resolve()),
@@ -770,7 +790,7 @@ def generate_report(directory: Path) -> None:
                 r
                 for baseline_name, r in results
                 if r["config"]["model"] == result["config"]["model"]
-                and r["config"].get("example_layout", "flat") == "flat"
+                and r["config"].get("baseline", True)
                 and (
                     not r["config"]["booking_date"]
                     if "booking_date" in result["config"] and "booking_date" in r["config"]
@@ -919,9 +939,9 @@ def main() -> None:
     )
     run.add_argument("--offline", action="store_true")
     run.add_argument(
-        "--compare-example-layouts",
-        action="store_true",
-        help="Compare separate versus category-nested examples with identical guidance.",
+        "--config",
+        type=Path,
+        help="Local experiment JSON defining defaults, variants, and an optional provider.",
     )
     report = commands.add_parser("report")
     report.add_argument("directory", type=Path)
@@ -945,7 +965,7 @@ def main() -> None:
                 args.dataset,
                 args.output,
                 offline=args.offline,
-                compare_example_layouts=args.compare_example_layouts,
+                experiment=args.config,
             )
         case "report":
             generate_report(args.directory)

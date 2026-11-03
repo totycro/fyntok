@@ -1,0 +1,15 @@
+{
+  "provider": "provider.py",
+  "defaults": {
+    "model": "gpt-6.1-sol",
+    "category_names": true,
+    "category_format": "name-only-v1",
+    "short_refs": true,
+    "grouped": false,
+    "booking_date": false
+  },
+  "variants": [
+    {"label": "flat examples", "example_layout": "flat", "baseline": true},
+    {"label": "nested examples", "example_layout": "nested", "baseline": false}
+  ]
+}

@@ -2,6 +2,7 @@
 
 import csv
 import json
+import runpy
 import sqlite3
 from pathlib import Path
 from typing import Any, override
@@ -17,11 +18,17 @@ from fyntok.experimentation import (
     export_review,
     generate_report,
     load_dataset,
+    load_experiment,
     prepare_review,
     provider_response,
     run_pilot,
     variants,
     write_json,
+)
+
+EXAMPLE_PLACEMENT = (
+    Path(__file__).resolve().parents[1]
+    / "experiments/categorization/experiments/example-placement/experiment.json"
 )
 
 
@@ -112,13 +119,15 @@ def test_variants_keep_duplicates_separate_and_omit_booking_date(
 
 
 def test_example_layouts_preserve_guidance_and_response_contract(sample: dict[str, Any]) -> None:
-    configs = variants(("mock",), compare_example_layouts=True)
+    configs, provider = load_experiment(EXAMPLE_PLACEMENT)
+    transform = runpy.run_path(str(provider))["nest_examples"]
     assert [c["example_layout"] for c in configs] == ["flat", "nested"]
     sample["review_example_ids"] = ["example-1"]
     before = json.dumps(sample)
     clients = [CapturingClient(), CapturingClient()]
     results = [
-        evaluate(client, sample, config) for client, config in zip(clients, configs, strict=True)
+        evaluate(client, sample, config, transform=transform if i else None)
+        for i, (client, config) in enumerate(zip(clients, configs, strict=True))
     ]
     flat, nested = [client.payloads[0] for client in clients]
     assert flat["transactions"] == nested["transactions"]
@@ -144,12 +153,82 @@ def test_example_layouts_preserve_guidance_and_response_contract(sample: dict[st
     [{"example_layout": "unknown"}, {"example_layout": "nested", "category_format": "legacy"}],
 )
 def test_invalid_example_layout_fails_before_inference(
-    sample: dict[str, Any], changes: dict[str, str]
+    changes: dict[str, str],
 ) -> None:
-    client = CapturingClient()
-    with pytest.raises(ValueError, match="Example layout"):
-        evaluate(client, sample, {**variants(("mock",))[0], **changes})
-    assert not client.payloads
+    configs, provider = load_experiment(EXAMPLE_PLACEMENT)
+    call_api = runpy.run_path(str(provider))["call_api"]
+    with pytest.raises(ValueError, match="This experiment requires"):
+        call_api("", {"config": {"variant": {**configs[0], **changes}}}, {})
+
+
+def test_experiment_config_defaults_and_relative_provider(tmp_path: Path) -> None:
+    (tmp_path / "provider.py").write_text("# Local provider fixture.\n")
+    path = tmp_path / "experiment.json"
+    write_json(
+        path,
+        {
+            "defaults": variants(("mock",))[0],
+            "variants": [{"label": "baseline", "baseline": True}, {"label": "alternative"}],
+            "provider": "provider.py",
+        },
+    )
+    configs, provider = load_experiment(path)
+    assert provider == tmp_path / "provider.py"
+    assert [c["label"] for c in configs] == ["baseline", "alternative"]
+    assert all(c["model"] == "mock" for c in configs)
+    assert all(c["category_format"] == "name-only-v1" for c in configs)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"variants": []},
+        {"variants": ["invalid"]},
+        {"defaults": []},
+        {"defaults": {}},
+        {"variants": [{}, {}]},
+        {"provider": "missing.py"},
+    ],
+)
+def test_experiment_config_rejects_invalid_matrix(tmp_path: Path, changes: dict[str, Any]) -> None:
+    path = tmp_path / "experiment.json"
+    write_json(path, {"defaults": variants(("mock",))[0], "variants": [{}], **changes})
+    with pytest.raises(ValueError):
+        load_experiment(path)
+
+
+def test_experiment_config_can_use_shared_provider(tmp_path: Path) -> None:
+    path = tmp_path / "experiment.json"
+    write_json(path, {"defaults": variants(("mock",))[0], "variants": [{}]})
+    configs, provider = load_experiment(path)
+    assert configs == variants(("mock",))
+    assert provider == experimentation.TOOLS / "provider.py"
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_experiment_local_provider_uses_shared_scoring(
+    tmp_path: Path, sample: dict[str, Any], index: int
+) -> None:
+    configs, provider = load_experiment(EXAMPLE_PLACEMENT)
+    dataset_path = tmp_path / "dataset.json"
+    write_json(dataset_path, sample)
+    response = runpy.run_path(str(provider))["call_api"](
+        "",
+        {
+            "config": {
+                "dataset": str(dataset_path),
+                "output": str(tmp_path / "run"),
+                "offline": True,
+                "variant": configs[index],
+            }
+        },
+        {},
+    )
+    result = json.loads(response["output"])
+    assert result["config"] == configs[index]
+    assert result["metrics"]["coverage"] == 1
+    assert result["metrics"]["accuracy"] == pytest.approx(2 / 3)
+    assert result["offline"]
 
 
 @pytest.mark.parametrize("failure", ["missing", "duplicate", "unknown", "transport"])
@@ -606,7 +685,8 @@ def test_layout_report_uses_flat_baseline_even_when_nested_sorts_first(
     tmp_path: Path, sample: dict[str, Any]
 ) -> None:
     write_json(tmp_path / "dataset.json", sample)
-    flat, nested = variants(("mock",), compare_example_layouts=True)
+    configs, _ = load_experiment(EXAMPLE_PLACEMENT)
+    flat, nested = [{**config, "model": "mock"} for config in configs]
     baseline = evaluate(OfflineClient(), sample, flat)
     baseline.update(tokenUsage=None, offline=True)
     changed = json.loads(json.dumps(baseline))
