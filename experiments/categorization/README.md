@@ -163,16 +163,22 @@ configuration with three repetitions:
 
 - **Amount:** cleaned description and signed integer `amount_cents`.
 
-The current configuration records `category_format: name-only-v1` in saved
+The current configuration records `category_format: name-only-nested-v2` in saved
 metadata and includes it in run filenames to distinguish it from earlier runs.
-Category objects contain only `name`, `definition`, and `kind`; they have no `id`.
-Confirmed examples and model responses use `category_name`, with exact saved
+Category objects contain `name`, `definition`, `kind`, and `confirmed_examples`;
+they have no `id`. Each category's example list contains `example_id` and
+`description`, with an empty list when no examples apply. There is no top-level
+example list or redundant category label on individual examples.
+Model responses use `category_name`, with exact saved
 names enforced by the output schema and local validation. Predictions are mapped
 back to stable category IDs for scoring and storage. Dataset files retain IDs.
 The prompt, schema, and reference conversion are shared with production; production
 retrieves examples per batch, while this benchmark fixes examples for the full sample.
-Historical configurations without this format marker retain their previous ID-field
-requests, and historical reports and saved request traces remain readable.
+Named requests always nest examples, including configurations carrying the older
+`name-only-v1` marker. Historical reports and saved request traces remain readable
+and unchanged. The example-placement experiment alone flattens examples in its
+local provider when explicitly comparing layouts. Older ID-field experiments
+retain their separate legacy serialization.
 
 Requests use category names, short transaction references (`t1`, `t2`, ...), and
 individual rows, even when descriptions repeat. Positive amounts mean incoming;

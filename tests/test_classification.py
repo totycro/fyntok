@@ -42,12 +42,15 @@ def test_named_response_uses_snapshot_and_accepts_reordered_rows(payload: dict[s
     batch = named_classification(payload)
     assert payload == original
     assert batch.payload["categories"] == [
-        {"name": "Food & Café", "definition": "Meals", "kind": "spending"},
-        {"name": "Income", "definition": "Income", "kind": "income"},
+        {
+            "name": "Food & Café",
+            "definition": "Meals",
+            "kind": "spending",
+            "confirmed_examples": [{"example_id": "example", "description": "Market"}],
+        },
+        {"name": "Income", "definition": "Income", "kind": "income", "confirmed_examples": []},
     ]
-    assert batch.payload["confirmed_examples"] == [
-        {"example_id": "example", "description": "Market", "category_name": "Food & Café"}
-    ]
+    assert "confirmed_examples" not in batch.payload
     assert "category_id" not in json.dumps(batch.payload)
     assert [t["amount_cents"] for t in batch.payload["transactions"]] == [-1250, 2000]
     schema = batch.schema()["properties"]["assignments"]["items"]
@@ -67,6 +70,33 @@ def test_named_response_uses_snapshot_and_accepts_reordered_rows(payload: dict[s
     next_batch = named_classification(payload)
     assert next_batch.transaction_ids == {"t1": "next-batch"}
     assert batch.transaction_ids == {"t1": "purchase", "t2": "incoming"}
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_nested_examples_are_partitioned_without_redundant_labels(
+    payload: dict[str, Any], empty: bool
+) -> None:
+    payload["confirmed_examples"].extend(
+        [
+            {
+                "example_id": "income-example",
+                "description": "Incoming credit",
+                "category_id": "income-id",
+            },
+            {"example_id": "food-example", "description": "Meal", "category_id": "food-id"},
+        ]
+    )
+    if empty:
+        payload["confirmed_examples"] = []
+    original = copy.deepcopy(payload)
+    batch = named_classification(payload)
+    for category, stored in zip(batch.payload["categories"], payload["categories"], strict=True):
+        assert category["confirmed_examples"] == [
+            {k: e[k] for k in ("example_id", "description")}
+            for e in payload["confirmed_examples"]
+            if e["category_id"] == stored["id"]
+        ]
+    assert payload == original
 
 
 @pytest.mark.parametrize(

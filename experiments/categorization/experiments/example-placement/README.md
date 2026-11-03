@@ -10,7 +10,8 @@ just experiment-run --config experiments/categorization/experiments/example-plac
 ```
 
 `experiment.json` defines both variants and the flat baseline. `provider.py`
-contains only this experiment's input transformation. The shared runner handles
+contains only this experiment's input transformation: flattening the production
+nested payload for the flat variant. The shared runner handles
 dataset validation, transport, scoring, three repetitions, reports, and importing
 the comparison into Promptfoo. No new CLI flag or recipe is needed for a new
 experiment: add a config, and optionally a local provider for custom transformations.

@@ -390,7 +390,8 @@ def evaluate(
     validate_transaction_context(dataset)
     validate_examples(dataset)
     categories = dataset["categories"]
-    name_only = config.get("category_format") == "name-only-v1"
+    category_format = config.get("category_format")
+    name_only = category_format in {"name-only-v1", "name-only-nested-v2"}
     references = {c["id"]: c["name"] if config["category_names"] else c["id"] for c in categories}
     reverse = {reference: cid for cid, reference in references.items()}
     wire_categories = [{**c, "id": references[c["id"]]} for c in categories]
@@ -593,7 +594,7 @@ def variants(models: tuple[str, ...] = MODELS) -> list[dict[str, Any]]:
         {
             "model": model,
             "category_names": True,
-            "category_format": "name-only-v1",
+            "category_format": "name-only-nested-v2",
             "short_refs": True,
             "grouped": False,
             "booking_date": False,

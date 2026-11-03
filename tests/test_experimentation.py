@@ -109,10 +109,13 @@ def test_variants_keep_duplicates_separate_and_omit_booking_date(
         assert "reviewer" not in payload
         expected_ref = "t1" if config["short_refs"] else "row-1"
         assert payload["transactions"][0]["transaction_id"] == expected_ref
-        assert payload["confirmed_examples"][0]["category_name"] == (
-            "Food" if config["category_names"] else "c-food"
-        )
-        example_ids = [e["example_id"] for e in payload["confirmed_examples"]]
+        assert "confirmed_examples" not in payload
+        assert payload["categories"][0]["confirmed_examples"] == [
+            {"example_id": "example-1", "description": "Bakery"}
+        ]
+        example_ids = [
+            e["example_id"] for c in payload["categories"] for e in c["confirmed_examples"]
+        ]
         if baseline_examples is None:
             baseline_examples = example_ids
         assert example_ids == baseline_examples
@@ -120,13 +123,13 @@ def test_variants_keep_duplicates_separate_and_omit_booking_date(
 
 def test_example_layouts_preserve_guidance_and_response_contract(sample: dict[str, Any]) -> None:
     configs, provider = load_experiment(EXAMPLE_PLACEMENT)
-    transform = runpy.run_path(str(provider))["nest_examples"]
+    transform = runpy.run_path(str(provider))["flatten_examples"]
     assert [c["example_layout"] for c in configs] == ["flat", "nested"]
     sample["review_example_ids"] = ["example-1"]
     before = json.dumps(sample)
     clients = [CapturingClient(), CapturingClient()]
     results = [
-        evaluate(client, sample, config, transform=transform if i else None)
+        evaluate(client, sample, config, transform=None if i else transform)
         for i, (client, config) in enumerate(zip(clients, configs, strict=True))
     ]
     flat, nested = [client.payloads[0] for client in clients]
@@ -176,7 +179,7 @@ def test_experiment_config_defaults_and_relative_provider(tmp_path: Path) -> Non
     assert provider == tmp_path / "provider.py"
     assert [c["label"] for c in configs] == ["baseline", "alternative"]
     assert all(c["model"] == "mock" for c in configs)
-    assert all(c["category_format"] == "name-only-v1" for c in configs)
+    assert all(c["category_format"] == "name-only-nested-v2" for c in configs)
 
 
 @pytest.mark.parametrize(

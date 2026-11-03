@@ -99,10 +99,12 @@ def test_review_examples_are_inputs_and_never_scored(
     config = variants(("mock",))[0]
     result = evaluate(Client(), dataset, config)
     assert len(captured) == 1
-    assert captured[0]["confirmed_examples"] == [
-        {"example_id": "row-0", "description": "Example insurer", "category_name": "Shopping"},
-        {"example_id": "old", "description": "Old merchant", "category_name": "Food"},
-    ]
+    assert "confirmed_examples" not in captured[0]
+    examples = {c["name"]: c["confirmed_examples"] for c in captured[0]["categories"]}
+    assert examples == {
+        "Shopping": [{"example_id": "row-0", "description": "Example insurer"}],
+        "Food": [{"example_id": "old", "description": "Old merchant"}],
+    }
     assert [t["description"] for t in captured[0]["transactions"]] == ["Market", "Bakery"]
     assert all(
         set(t) == {"transaction_id", "description", "amount_cents"}
@@ -246,10 +248,10 @@ def test_all_selected_examples_reach_every_batch_and_repetition(
         evaluate(Client(), dataset, variants(("mock",))[0])
     assert len(captured) == 6
     for payload in captured:
-        ids = [e["example_id"] for e in payload["confirmed_examples"]]
+        ids = [e["example_id"] for c in payload["categories"] for e in c["confirmed_examples"]]
         assert set(dataset["review_example_ids"]) <= set(ids)
         assert len(ids) == len(set(ids)) == 85
-    assert all(p["confirmed_examples"] == captured[0]["confirmed_examples"] for p in captured)
+    assert all(p["categories"] == captured[0]["categories"] for p in captured)
 
 
 def test_review_example_selection_is_hashed(review: Path, tmp_path: Path) -> None:

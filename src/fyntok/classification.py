@@ -116,7 +116,11 @@ def named_classification(
     category_ids = {c["name"]: c["id"] for c in categories}
     if len(category_ids) != len(categories):
         raise ValueError("Category names must be unique.")
-    names = {c["id"]: c["name"] for c in categories}
+    examples: dict[str, list[dict[str, Any]]] = {c["id"]: [] for c in categories}
+    for example in payload["confirmed_examples"]:
+        examples[example["category_id"]].append(
+            {k: example[k] for k in ("example_id", "description")}
+        )
     transactions = payload["transactions"]
     references = {
         t["transaction_id"]: f"t{i}" if short_refs else t["transaction_id"]
@@ -125,14 +129,12 @@ def named_classification(
     if len(references) != len(transactions):
         raise ValueError("Transaction IDs must be unique.")
     wire = {
-        "categories": [{k: c[k] for k in ("name", "definition", "kind")} for c in categories],
-        "confirmed_examples": [
+        "categories": [
             {
-                "example_id": e["example_id"],
-                "description": e["description"],
-                "category_name": names[e["category_id"]],
+                **{k: c[k] for k in ("name", "definition", "kind")},
+                "confirmed_examples": examples[c["id"]],
             }
-            for e in payload["confirmed_examples"]
+            for c in categories
         ],
         "transactions": [
             {
