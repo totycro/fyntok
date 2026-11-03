@@ -172,7 +172,13 @@ def build_ai_panel(engine: Engine, auth: ChatGPTSession) -> html.Div:
                 "Edit a suggestion, select its row, then approve or dismiss it. "
                 "Categories are added only after approval."
             ),
-            grid("ai-proposals", [], columns("name", "definition", "kind"), editable=True),
+            grid(
+                "ai-proposals",
+                [],
+                columns("name", "definition", "kind"),
+                editable=True,
+                selectable=True,
+            ),
             html.Div(
                 [
                     html.Button("Approve category", id="ai-approve"),

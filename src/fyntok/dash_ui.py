@@ -47,6 +47,7 @@ def grid(
     *,
     key: str = "id",
     editable: bool = False,
+    selectable: bool = False,
 ) -> dag.AgGrid:
     return dag.AgGrid(
         id=identity,
@@ -64,7 +65,7 @@ def grid(
         dashGridOptions={
             "pagination": True,
             "paginationPageSize": 20,
-            "rowSelection": {"mode": "singleRow"},
+            **({"rowSelection": {"mode": "singleRow"}} if selectable else {}),
             "stopEditingWhenCellsLoseFocus": True,
         },
         style={"height": "430px", "width": "100%"},

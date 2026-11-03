@@ -213,6 +213,7 @@ def build_page(engine: Engine, auth: ChatGPTSession) -> html.Main:
                         "currency",
                         money_columns=("amount",),
                     ),
+                    selectable=True,
                 ),
                 dcc.ConfirmDialogProvider(
                     html.Button("Delete selected example", id="example-delete"),
