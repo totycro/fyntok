@@ -106,14 +106,16 @@ def report_layout(prefix: str, *, overview: bool = False) -> html.Section:
             html.Div(controls, className="controls"),
             dcc.Loading(html.Div(id=f"{prefix}-report")),
             dcc.Store(id=f"{prefix}-context"),
-            html.Div(
+            dcc.Store(id=f"{prefix}-drill-sync"),
+            html.Button("View report transactions", id=f"{prefix}-all-transactions"),
+            html.Dialog(
                 [
-                    html.Button("View report transactions", id=f"{prefix}-all-transactions"),
                     html.Button("Close report transactions", id=f"{prefix}-close-drill"),
+                    html.Div(id=f"{prefix}-drill"),
                 ],
-                className="actions",
+                id=f"{prefix}-drill-dialog",
+                **{"aria-label": "Transactions behind this report"},
             ),
-            html.Div(id=f"{prefix}-drill"),
         ]
     )
 
@@ -517,6 +519,29 @@ def drill_rows(
 
 
 def register_report(app: Dash, engine: Engine, prefix: str, *, overview: bool = False) -> None:
+    app.clientside_callback(
+        """function(children) {
+            const dialog = document.getElementById('PREFIX-drill-dialog');
+            if (!dialog) return window.dash_clientside.no_update;
+            if (!dialog.dataset.bound) {
+                dialog.addEventListener('cancel', () => {
+                    dash_clientside.set_props('PREFIX-drill', {children: []});
+                });
+                dialog.dataset.bound = 'true';
+            }
+            if (children && children.length) {
+                if (!dialog.open) dialog.showModal();
+                dialog.scrollTop = 0;
+                requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+            } else if (dialog.open) {
+                dialog.close();
+            }
+            return window.dash_clientside.no_update;
+        }""".replace("PREFIX", prefix),
+        Output(f"{prefix}-drill-sync", "data"),
+        Input(f"{prefix}-drill", "children"),
+    )
+
     @callback(
         app,
         Output(f"{prefix}-currency", "options"),
