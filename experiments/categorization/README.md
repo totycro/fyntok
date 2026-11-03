@@ -38,6 +38,24 @@ remain available; archived runs are never imported automatically.
 
 ## Prepare and run a benchmark
 
+### Compare example placement
+
+Use the same frozen reviewed dataset to compare the current top-level example
+list against examples nested inside each category:
+
+```bash
+just experiment-run --compare-example-layouts
+```
+
+This opt-in matrix runs both layouts three times, with identical selected examples,
+transaction batches, instructions, and output schema. Nested examples omit the
+redundant category name; categories without examples contain an empty list.
+The default single-variant pilot and production requests are unchanged.
+For 41 test transactions this makes 12 live inference requests. Saved metadata,
+request traces, and Promptfoo columns identify the layout. Reports compare each
+nested run against the flat run from the same repetition, including paired
+improvements/regressions, token usage, and cross-repetition consistency.
+
 Prepare a private benchmark:
 
 ```bash

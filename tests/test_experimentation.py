@@ -56,6 +56,8 @@ def sample() -> dict[str, Any]:
 class CapturingClient:
     def __init__(self) -> None:
         self.payloads: list[dict[str, Any]] = []
+        self.schemas: list[dict[str, Any]] = []
+        self.instructions: list[str] = []
 
     def request(
         self,
@@ -67,6 +69,8 @@ class CapturingClient:
         operation: str = "request",
     ) -> dict[str, Any]:
         self.payloads.append(payload)
+        self.schemas.append(schema)
+        self.instructions.append(instructions)
         return OfflineClient().request(model, payload, schema, instructions, operation=operation)
 
 
@@ -105,6 +109,47 @@ def test_variants_keep_duplicates_separate_and_omit_booking_date(
         if baseline_examples is None:
             baseline_examples = example_ids
         assert example_ids == baseline_examples
+
+
+def test_example_layouts_preserve_guidance_and_response_contract(sample: dict[str, Any]) -> None:
+    configs = variants(("mock",), compare_example_layouts=True)
+    assert [c["example_layout"] for c in configs] == ["flat", "nested"]
+    sample["review_example_ids"] = ["example-1"]
+    before = json.dumps(sample)
+    clients = [CapturingClient(), CapturingClient()]
+    results = [
+        evaluate(client, sample, config) for client, config in zip(clients, configs, strict=True)
+    ]
+    flat, nested = [client.payloads[0] for client in clients]
+    assert flat["transactions"] == nested["transactions"]
+    assert "confirmed_examples" not in nested
+    assert nested["categories"][1]["confirmed_examples"] == []
+    flattened = [
+        {**example, "category_name": category["name"]}
+        for category in nested["categories"]
+        for example in category["confirmed_examples"]
+    ]
+    assert flattened == flat["confirmed_examples"]
+    assert [
+        {k: v for k, v in c.items() if k != "confirmed_examples"} for c in nested["categories"]
+    ] == flat["categories"]
+    assert clients[0].schemas == clients[1].schemas
+    assert clients[0].instructions == clients[1].instructions
+    assert results[0]["rows"] == results[1]["rows"]
+    assert json.dumps(sample) == before
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"example_layout": "unknown"}, {"example_layout": "nested", "category_format": "legacy"}],
+)
+def test_invalid_example_layout_fails_before_inference(
+    sample: dict[str, Any], changes: dict[str, str]
+) -> None:
+    client = CapturingClient()
+    with pytest.raises(ValueError, match="Example layout"):
+        evaluate(client, sample, {**variants(("mock",))[0], **changes})
+    assert not client.payloads
 
 
 @pytest.mark.parametrize("failure", ["missing", "duplicate", "unknown", "transport"])
@@ -555,3 +600,26 @@ def test_report_pairs_changes_and_repetition_stability(
     assert report["runs"][2]["improved"] is None  # Baseline repetition 2 is absent.
     assert report["stability"]["mock-amount1-date1"] == pytest.approx(2 / 3)
     assert "not model accuracy evidence" in (tmp_path / "comparison.md").read_text()
+
+
+def test_layout_report_uses_flat_baseline_even_when_nested_sorts_first(
+    tmp_path: Path, sample: dict[str, Any]
+) -> None:
+    write_json(tmp_path / "dataset.json", sample)
+    flat, nested = variants(("mock",), compare_example_layouts=True)
+    baseline = evaluate(OfflineClient(), sample, flat)
+    baseline.update(tokenUsage=None, offline=True)
+    changed = json.loads(json.dumps(baseline))
+    changed["config"] = nested
+    changed["rows"][1]["prediction"]["category_id"] = "c-shop"
+    write_json(tmp_path / "a-nested-r1/result.json", changed)
+    write_json(tmp_path / "z-flat-r1/result.json", baseline)
+    generate_report(tmp_path)
+    report = json.loads((tmp_path / "comparison.json").read_text())
+    assert report["runs"][0]["improved"] == 1
+    assert report["runs"][0]["worsened"] == 0
+    assert report["runs"][1]["improved"] == 0
+    assert {v["label"] for v in report["variants"]} == {
+        "mock · flat examples",
+        "mock · nested examples",
+    }

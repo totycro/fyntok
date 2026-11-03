@@ -384,6 +384,9 @@ def evaluate(client: Requester, dataset: dict[str, Any], config: dict[str, Any])
     validate_examples(dataset)
     categories = dataset["categories"]
     name_only = config.get("category_format") == "name-only-v1"
+    example_layout = config.get("example_layout", "flat")
+    if example_layout not in {"flat", "nested"} or (example_layout == "nested" and not name_only):
+        raise ValueError("Example layout must be flat or nested; nesting requires name-only-v1.")
     references = {c["id"]: c["name"] if config["category_names"] else c["id"] for c in categories}
     reverse = {reference: cid for cid, reference in references.items()}
     wire_categories = [{**c, "id": references[c["id"]]} for c in categories]
@@ -417,9 +420,25 @@ def evaluate(client: Requester, dataset: dict[str, Any], config: dict[str, Any])
         }
         try:
             named = named_classification(payload, short_refs=False) if name_only else None
+            request_payload = named.payload if named else payload
+            if example_layout == "nested":
+                request_payload = {
+                    "categories": [
+                        {
+                            **category,
+                            "confirmed_examples": [
+                                {k: v for k, v in example.items() if k != "category_name"}
+                                for example in request_payload["confirmed_examples"]
+                                if example["category_name"] == category["name"]
+                            ],
+                        }
+                        for category in request_payload["categories"]
+                    ],
+                    "transactions": request_payload["transactions"],
+                }
             output = client.request(
                 config["model"],
-                named.payload if named else payload,
+                request_payload,
                 named.schema() if named else classification_schema(wire_categories),
                 CLASSIFICATION_INSTRUCTIONS if named else INSTRUCTIONS,
                 operation="experiment",
@@ -574,8 +593,10 @@ def get_assert(output: str, context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def variants(models: tuple[str, ...] = MODELS) -> list[dict[str, Any]]:
-    return [
+def variants(
+    models: tuple[str, ...] = MODELS, *, compare_example_layouts: bool = False
+) -> list[dict[str, Any]]:
+    baseline = [
         {
             "model": model,
             "category_names": True,
@@ -586,14 +607,27 @@ def variants(models: tuple[str, ...] = MODELS) -> list[dict[str, Any]]:
         }
         for model in models
     ]
+    if compare_example_layouts:
+        return [
+            {**config, "example_layout": layout}
+            for config in baseline
+            for layout in ("flat", "nested")
+        ]
+    return baseline
 
 
-def run_pilot(dataset_path: Path, output: Path, *, offline: bool = False) -> None:
+def run_pilot(
+    dataset_path: Path,
+    output: Path,
+    *,
+    offline: bool = False,
+    compare_example_layouts: bool = False,
+) -> None:
     dataset = load_dataset(dataset_path)
     if dataset.get("offline_only") and not offline:
         raise ValueError("This scripted fixture is for offline integration checks only.")
     validate_transaction_context(dataset)
-    matrix = variants()
+    matrix = variants(compare_example_layouts=compare_example_layouts)
     request_count = sum(len(batches_for(dataset, c["grouped"])) for c in matrix) * (
         1 if offline else 3
     )
@@ -659,7 +693,9 @@ def run_pilot(dataset_path: Path, output: Path, *, offline: bool = False) -> Non
                 f"{variant['model']}-names{int(variant['category_names'])}"
                 f"-short{int(variant['short_refs'])}-group{int(variant['grouped'])}"
                 f"-amount1-date{int(variant['booking_date'])}"
-                f"-{variant['category_format']}-r{repetition + 1}"
+                f"-{variant['category_format']}"
+                + (f"-examples-{variant['example_layout']}" if "example_layout" in variant else "")
+                + f"-r{repetition + 1}"
             )
             config = {
                 "description": f"{'OFFLINE smoke | ' if offline else ''}{run_label(key, variant)}",
@@ -734,6 +770,7 @@ def generate_report(directory: Path) -> None:
                 r
                 for baseline_name, r in results
                 if r["config"]["model"] == result["config"]["model"]
+                and r["config"].get("example_layout", "flat") == "flat"
                 and (
                     not r["config"]["booking_date"]
                     if "booking_date" in result["config"] and "booking_date" in r["config"]
@@ -881,6 +918,11 @@ def main() -> None:
         default=ROOT / "data/experiments" / datetime.now(UTC).strftime("pilot-%Y%m%dT%H%M%S%fZ"),
     )
     run.add_argument("--offline", action="store_true")
+    run.add_argument(
+        "--compare-example-layouts",
+        action="store_true",
+        help="Compare separate versus category-nested examples with identical guidance.",
+    )
     report = commands.add_parser("report")
     report.add_argument("directory", type=Path)
     view_report = commands.add_parser("view-report")
@@ -899,7 +941,12 @@ def main() -> None:
         case "prepare":
             prepare_review(args.review, args.output, args.reviewer)
         case "run":
-            run_pilot(args.dataset, args.output, offline=args.offline)
+            run_pilot(
+                args.dataset,
+                args.output,
+                offline=args.offline,
+                compare_example_layouts=args.compare_example_layouts,
+            )
         case "report":
             generate_report(args.directory)
         case "view-report":
