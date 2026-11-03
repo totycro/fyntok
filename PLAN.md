@@ -2,7 +2,7 @@
 
 ## Summary
 
-Build a local application using **Python, NiceGUI, Plotly, and SQLite**, with AI supplied through the user's **ChatGPT Pro plan**.
+Build a local application using **Python, Dash, Plotly, and SQLite**, with AI supplied through the user's **ChatGPT Pro plan**.
 
 The main workflow is to import several years of transactions, then repeatedly improve categories and assignments across the entire historical dataset. Corrections guide both historical reprocessing and future imports. Users may revisit this process only every few years, spending time refining the historical assignments during each session.
 
@@ -208,3 +208,12 @@ The subscription integration was reviewed on October 8, 2026. Verify current req
 - Validation: `just check` passed (Ruff, formatting, strict type checking, and 392 tests). Browser checks with synthetic multi-year history and many categories verified chart-driven category drill-down, currency switching, monthly/historical and monthly/yearly controls, tab changes, and a 390px viewport without horizontal page overflow or JavaScript errors. Private transaction data was not used for browser previews.
 - “What changed?” and its comparison selector appear only in Historical explorer; Monthly overview omits them because month-to-month changes are too volatile.
 - Recurring-payment detection, budgets, and net worth remain outside this release.
+
+
+### Dash migration — November 3, 2026
+
+- Replaced NiceGUI with Dash and Dash AG Grid. Kept the CLI, SQLite schema, integer-cent financial logic, revision checks, manual protection, and human-confirmed AI guidance.
+- Migrated imports and account settings, category management, transaction corrections and undo, example deletion, import history, monthly/historical reports, Plotly drill-downs, and AI authentication/proposals/cancellation/recovery. Report controls and draft proposal edits stay mounted while navigating or closing Data tools.
+- AI work runs in a local background thread; Dash polls durable run progress without blocking manual callbacks. Existing runs remain recoverable after restarting the app. No new external service is required.
+- Replaced NiceGUI user simulations with Dash HTTP callback workflow tests using temporary databases and mocked AI/auth boundaries. Browser smoke checks use synthetic transactions.
+- Validation: `uv sync --locked` and `just check` passed on Python 3.14 (475 tests, 92.02% combined coverage). Ran `just dev` with a temporary synthetic database; Chromium verified formatted amounts, individual correction and undo, responsive charts after tab changes, report drill-downs, Escape dismissal, and a 390px viewport without page overflow or browser errors. AI/auth tests use scripted clients; no live inference was performed. Built the wheel and verified the dashboard assets are included.

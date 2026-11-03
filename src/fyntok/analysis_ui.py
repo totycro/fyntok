@@ -1,17 +1,25 @@
-"""Interactive financial analysis; drill-down dialogs preserve the report's controls."""
+"""Dash financial reports and reconciled transaction drill-downs."""
 
-from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, replace
 from datetime import date
 from typing import Any
 
-import plotly.graph_objects as go
-from nicegui import events, ui
+from dash import ALL, Dash, Input, Output, State, ctx, dcc, html
+from dash.exceptions import PreventUpdate
 from sqlalchemy.engine import Engine
 
 from .accounts import repayment_warning
-from .analysis_plot import AnalysisPlot
 from .charts import breakdown_figure, cashflow_figure, spending_heatmap
+from .dash_ui import (
+    MONEY_FORMAT,
+    callback,
+    columns,
+    dropdown,
+    grid,
+    json_rows,
+    money,
+    transaction_grid,
+)
 from .date_ui import iso_date_input
 from .insights import (
     Period,
@@ -25,666 +33,759 @@ from .insights import (
     observed_history,
     period_label,
 )
+from .manual import categories
 from .queries import Filters, transaction_rows
 
 
-@dataclass
-class AnalysisState:
-    view: str = "Monthly overview"
-    currency: str | None = None
-    month: str | None = None
-    history_period: str = "All history"
-    custom_start: str = ""
-    custom_end: str = ""
-    comparison: str = "Previous period"
-    grouping: str = "Monthly"
-    breakdown: str = "Categories"
-    rolling: bool = False
-    selected_categories: list[str] = field(default_factory=list)
+def read_filters(data: dict[str, Any] | None) -> Filters:
+    values = dict(data or {})
+    for key in ("start", "end"):
+        if values.get(key):
+            values[key] = date.fromisoformat(values[key])
+    filters = Filters(**values)
+    filters.validate()
+    return filters
 
 
-def build_analysis(
+def filter_data(filters: Filters) -> dict[str, Any]:
+    return {
+        key: value.isoformat() if isinstance(value, date) else value
+        for key, value in asdict(filters).items()
+    }
+
+
+def report_layout(prefix: str, *, overview: bool = False) -> html.Section:
+    controls: list[Any] = [
+        dropdown(f"{prefix}-currency", "Currency", [], clearable=False),
+        dropdown(f"{prefix}-month", "Month", [], clearable=False),
+    ]
+    if not overview:
+        controls += [
+            dropdown(
+                "analysis-view",
+                "View",
+                ["Monthly overview", "Historical explorer"],
+                "Monthly overview",
+                clearable=False,
+            ),
+            dropdown(
+                "analysis-period", "History period", ["All history"], "All history", clearable=False
+            ),
+            iso_date_input("analysis-start", "Analysis from"),
+            iso_date_input("analysis-end", "Analysis through"),
+            dropdown(
+                "analysis-grouping",
+                "Trend grouping",
+                ["Monthly", "Yearly"],
+                "Monthly",
+                clearable=False,
+            ),
+            dropdown(
+                "analysis-comparison",
+                "Compare with",
+                ["Previous period", "Same period last year"],
+                "Previous period",
+                clearable=False,
+            ),
+            dropdown(
+                "analysis-breakdown",
+                "Breakdown",
+                ["Categories", "Merchants"],
+                "Categories",
+                clearable=False,
+            ),
+            dropdown("analysis-trends", "Category trends (empty = totals)", [], [], multi=True),
+            dcc.Checklist(
+                id="analysis-rolling",
+                options=[{"label": "Show 3-month spending average", "value": "rolling"}],
+                value=[],
+            ),
+        ]
+    return html.Section(
+        [
+            html.Div(controls, className="controls"),
+            dcc.Loading(html.Div(id=f"{prefix}-report")),
+            dcc.Store(id=f"{prefix}-context"),
+            html.Div(
+                [
+                    html.Button("View report transactions", id=f"{prefix}-all-transactions"),
+                    html.Button("Close report transactions", id=f"{prefix}-close-drill"),
+                ],
+                className="actions",
+            ),
+            html.Div(id=f"{prefix}-drill"),
+        ]
+    )
+
+
+def choose_report(
     engine: Engine,
     filters: Filters,
-    state: AnalysisState,
-    open_transaction: Callable[[dict[str, Any]], None],
-    money: Callable[[int], str],
-    columns: Callable[..., list[dict[str, Any]]],
-) -> None:
-    # Quasar's panel wrappers otherwise become scroll containers and prevent the
-    # report context from sticking to the viewport. Only relax the Analysis panel.
-    ui.add_css("""
-        .report-panels:has(.analysis-panel),
-        .report-panels > .q-panel:has(> .analysis-panel) {
-            overflow: visible;
-        }
-        .analysis-context {
-            position: sticky;
-            top: 0;
-            z-index: 10;
-            background: #eff6ff;
-            border-left: 4px solid #2563eb;
-            border-bottom: 1px solid #bfdbfe;
-            box-shadow: 0 2px 6px rgb(30 64 175 / 12%);
-        }
-    """)
-
-    def update(attribute: str, value: Any) -> None:
-        setattr(state, attribute, value)
-        dashboard.refresh()
-
-    @ui.refreshable
-    def dashboard() -> None:
-        options = currency_options(engine, filters)
-        chosen = filters.currency or (
-            state.currency if state.currency in options else next(iter(options), None)
+    currency: str,
+    month: str | None,
+    *,
+    view: str = "Monthly overview",
+    history_period: str = "All history",
+    start: str | None = None,
+    end: str | None = None,
+    comparison: str = "Previous period",
+) -> Report:
+    history = observed_history(engine, currency)
+    if not history:
+        raise ValueError("No matching history. Import transactions or adjust the filters.")
+    first = min(span[0] for span in history.values())
+    last = max(span[1] for span in history.values())
+    lower, upper = max(first, filters.start or first), min(last, filters.end or last)
+    if lower > upper:
+        raise ValueError("No history in the selected date range.")
+    if view == "Monthly overview":
+        selected = (
+            month_period(date.fromisoformat(f"{month}-01")) if bool(month) else month_period(upper)
         )
-        if chosen is not None and chosen not in options:
-            options.append(chosen)
-        state.currency = chosen
-        with ui.row().classes("w-full items-center gap-4"):
-            ui.toggle(
-                ["Monthly overview", "Historical explorer"],
-                value=state.view,
-                on_change=lambda e: update("view", e.value),
-            ).mark("analysis-view")
-            ui.select(
-                options,
-                value=chosen,
-                label="Analysis currency",
-                on_change=lambda e: update("currency", e.value),
-            ).classes("w-40").set_enabled(not bool(filters.currency))
-        ui.label(
-            "Reports reflect the active filters. Categorized credits count as income, "
-            "including refunds. "
-            "Spending includes all outgoing money, including uncategorized transactions "
-            "and debits assigned to income categories. "
-            "Uncategorized amounts are also shown separately for reference. "
-            "Net cash flow includes uncategorized money; internal transfers are excluded."
-        ).classes("text-sm text-gray-600")
-        if chosen is None:
-            ui.label("No matching history. Import transactions or adjust the filters.")
-            ui.table(
-                columns=columns("name", "spending", money_columns=("spending",)),
-                rows=[],
-                row_key="key",
+    elif history_period == "Custom dates":
+        if not bool(start) or not bool(end):
+            raise ValueError("Enter a valid analysis date range.")
+        selected = Period(date.fromisoformat(start), date.fromisoformat(end))
+    elif history_period.isdigit():
+        year = int(history_period)
+        selected = Period(date(year, 1, 1), date(year, 12, 31))
+    elif history_period == "Last 12 months":
+        selected = Period(month_start(upper, -11), month_period(upper).end)
+    else:
+        selected = Period(month_start(lower), month_period(upper).end)
+    selected = Period(
+        max(selected.start, filters.start or selected.start),
+        min(selected.end, filters.end or selected.end),
+    )
+    return build_report(
+        engine,
+        replace(filters, currency=currency),
+        selected,
+        year_ago=comparison == "Same period last year",
+    )
+
+
+def report_children(
+    engine: Engine,
+    prefix: str,
+    report: Report,
+    *,
+    overview: bool = False,
+    monthly: bool = True,
+    merchant: bool = False,
+    yearly: bool = False,
+    rolling: bool = False,
+    selected_categories: list[str] | None = None,
+    base_filters: Filters | None = None,
+) -> list[Any]:
+    currency = report.filters.currency or ""
+    first = min(span[0] for span in report.history.values())
+    last = max(span[1] for span in report.history.values())
+    children: list[Any] = [
+        html.Div(
+            f"{period_label(report.period)} · {currency}"
+            + (
+                "" if overview else f" · {'Monthly overview' if monthly else 'Historical explorer'}"
+            ),
+            className="context",
+        ),
+        html.Div(
+            [
+                html.Div(
+                    [title, html.Strong(f"{money(report.totals[field])} {currency}")],
+                    className="metric",
+                    id=f"{prefix}-{field}",
+                )
+                for title, field in [
+                    ("Spending", "spending_cents"),
+                    ("Income", "income_cents"),
+                    *([] if overview else [("Net cash flow", "net_cents")]),
+                ]
+            ],
+            className="metrics",
+        ),
+        html.P(
+            f"Uncategorized · outgoing {money(report.totals['uncategorized_outgoing_cents'])} "
+            f"{currency} · incoming {money(report.totals['uncategorized_incoming_cents'])} "
+            f"{currency}"
+        ),
+        html.P(
+            "Spending includes all outgoing money, including uncategorized transactions. "
+            "Categorized credits, including refunds, count as income. Internal transfers and "
+            "excluded card repayments are excluded. Uncategorized amounts are also shown "
+            "separately for reference.",
+            className="muted",
+        ),
+    ]
+    if warning := repayment_warning(transaction_rows(engine, report.filters)):
+        children.append(html.P(warning, className="warning"))
+    if (
+        report.period.start < first
+        or report.period.end > min(last, date.today())
+        or report.period.start.day != 1
+        or report.period.end != month_period(report.period.end).end
+    ):
+        children.append(
+            html.P(
+                "Partial period: recorded history does not span full calendar "
+                "months. Transaction dates do not confirm complete import coverage.",
+                className="warning",
             )
-            return
-        history = observed_history(engine, chosen)
-        if not history:
-            ui.label("No matching history. Import transactions or adjust the filters.")
-            return
-        first = min(span[0] for span in history.values())
-        last = max(span[1] for span in history.values())
-        ui.label(
-            f"Observed history · {chosen} · {first.isoformat()} through {last.isoformat()}"
-        ).classes("text-sm")
-        ui.label(
-            "Transaction dates do not establish complete import coverage. "
-            "Gaps mean no recorded activity, "
-            "not confirmed zero spending. Typical-month statistics use full interior months "
-            "with activity; "
-            "partial boundary months are excluded."
-        ).classes("text-sm text-gray-600")
-        lower, upper = max(first, filters.start or first), min(last, filters.end or last)
-        if lower > upper:
-            ui.label("No history in the selected date range.")
-            return
-        monthly = state.view == "Monthly overview"
-        with ui.row().classes("w-full items-end gap-4"):
-            if monthly:
-                available = months_in(Period(lower, upper))
-                if state.month not in available:
-                    state.month = default_overview_month(Period(lower, upper), date.today())
-                ui.select(
-                    list(reversed(available)),
-                    value=state.month,
-                    label="Overview month",
-                    on_change=lambda e: update("month", e.value),
-                ).classes("w-48")
-                selected = month_period(date.fromisoformat(f"{state.month}-01"))
+        )
+    missing = [row["month"] for row in report.series if not row["observed"]]
+    if missing:
+        children.append(
+            html.P(
+                f"No recorded activity: {', '.join(missing)}. "
+                "Import coverage is unknown; monthly charts show gaps.",
+                className="warning",
+            )
+        )
+
+    def chart(name: str, figure: Any) -> Any:
+        return dcc.Graph(
+            id={"type": f"{prefix}-chart", "index": name},
+            figure=figure,
+            responsive=True,
+            config={"displaylogo": False},
+        )
+
+    def groups(name: str, rows: list[dict[str, Any]], fields: tuple[str, ...]) -> Any:
+        extra = []
+        if name == "breakdown":
+            extra = [
+                {
+                    "field": "share",
+                    "headerName": "Share of spending (%)",
+                    "type": "numericColumn",
+                    "valueFormatter": {"function": "params.value.toFixed(1)"},
+                }
+            ]
+        elif name == "changes":
+            extra = [
+                {
+                    "field": "change_percent",
+                    "headerName": "Change (%)",
+                    "type": "numericColumn",
+                    "valueFormatter": {
+                        "function": "params.value == null ? 'No prior spending' : "
+                        "params.value.toFixed(1) + '%'"
+                    },
+                }
+            ]
+        return grid(
+            {"type": f"{prefix}-group", "index": name},
+            rows,
+            [*columns("name", *fields, money_columns=fields), *extra],
+            key="key",
+        )
+
+    trend = report
+    if monthly and not overview:
+        trend = build_report(
+            engine,
+            replace(report.filters, start=None, end=None),
+            Period(
+                max(
+                    month_start(report.period.start, -11),
+                    month_start(first),
+                    base_filters.start
+                    if base_filters is not None and base_filters.start is not None
+                    else date.min,
+                ),
+                report.period.end,
+            ),
+        )
+    if not overview:
+        children += [
+            html.P(
+                f"All non-transfer money · outgoing "
+                f"{money(report.totals['outgoing_cents'])} {currency} · "
+                f"incoming {money(report.totals['incoming_cents'])} {currency}"
+            ),
+            html.P(f"Observed history · {currency} · {first} through {last}"),
+            html.P(
+                "Typical-month statistics exclude partial boundary months and months "
+                "without recorded activity. Averages round to the nearest cent.",
+                className="muted",
+            ),
+        ]
+        if trend.average_cents is not None and trend.median_cents is not None:
+            children.append(
+                html.P(
+                    f"Typical month · average {money(trend.average_cents)} "
+                    f"{currency} · median {money(trend.median_cents)} {currency} · "
+                    f"{len(trend.eligible_months)} eligible months · "
+                    f"{trend.period.start} through {trend.period.end}"
+                )
+            )
+        else:
+            children.append(
+                html.P(
+                    "Insufficient history for typical-month statistics: "
+                    "no full interior months with recorded activity."
+                )
+            )
+        children.append(
+            chart(
+                "trend",
+                cashflow_figure(
+                    trend.series,
+                    currency,
+                    yearly=yearly,
+                    rolling=rolling,
+                    categories=[
+                        row for row in trend.categories if row["key"] in (selected_categories or [])
+                    ],
+                ),
+            )
+        )
+    breakdown = report.merchants if merchant else report.categories
+    if monthly and not merchant:
+        typical = {row["key"]: row for row in trend.categories}
+        breakdown = [
+            dict(
+                row,
+                average_cents=typical.get(row["key"], {}).get("average_cents"),
+                median_cents=typical.get(row["key"], {}).get("median_cents"),
+            )
+            for row in breakdown
+        ]
+    children += [
+        html.H3("Where the money went"),
+        chart(
+            "breakdown",
+            breakdown_figure(breakdown, currency, merchant=merchant, show_amounts=overview),
+        ),
+        html.P("Bars show the top 20. Click a bar or table row to inspect spending."),
+    ]
+    if not overview:
+        children.append(groups("breakdown", breakdown, ("spending", "average", "median")))
+        if not monthly:
+            children += [
+                html.H3("What changed?"),
+                html.P(
+                    f"Compared with {report.comparison.start} through "
+                    f"{report.comparison.end}; the same non-date filters apply."
+                ),
+            ]
+            if report.comparison_observed:
+                delta = report.totals["spending_cents"] - report.previous["spending_cents"]
+                before = report.previous["spending_cents"]
+                percent = f"{100 * delta / before:+.1f}%" if before else "No prior spending"
+                children.append(html.P(f"Spending change: {money(delta)} {currency} · {percent}"))
+                comparison_missing = any(
+                    month not in report.history for month in months_in(report.comparison)
+                )
+                if (
+                    comparison_missing
+                    or report.comparison.start < first
+                    or report.comparison.end > min(last, date.today())
+                ):
+                    children.append(
+                        html.P(
+                            "Comparison history has gaps or partial boundaries; "
+                            "totals may not cover equivalent activity.",
+                            className="warning",
+                        )
+                    )
+                changes = report.merchant_changes if merchant else report.category_changes
+                nonzero = [row for row in changes if row["change_cents"]]
+                if nonzero:
+                    leader = nonzero[0]
+                    children.append(
+                        html.P(
+                            f"Largest contributor: {leader['name']} "
+                            f"({money(leader['change_cents'])} {currency})."
+                        )
+                    )
+                else:
+                    children.append(html.P("No spending change across these groups."))
+                children.append(groups("changes", changes, ("spending", "previous", "change")))
             else:
-                presets = [
+                children.append(html.P("No comparison data in this period."))
+            children.append(
+                chart(
+                    "heatmap",
+                    spending_heatmap(report.categories, months_in(report.period), currency),
+                )
+            )
+            children.append(
+                grid(
+                    "analysis-month-table",
+                    [dict(row, **row["monthly_cents"]) for row in report.categories],
+                    [
+                        *columns("name"),
+                        *[
+                            {
+                                "field": month,
+                                "valueFormatter": {"function": MONEY_FORMAT},
+                            }
+                            for month in months_in(report.period)
+                        ],
+                    ],
+                    key="key",
+                )
+            )
+        else:
+            children += [html.H3("Above recent monthly spending")]
+            if len(report.baseline_months) < 3:
+                children.append(
+                    html.P(
+                        "At least three full observed months in the preceding "
+                        "six months are needed for a baseline."
+                    )
+                )
+            else:
+                children += [
+                    html.P(
+                        f"Baseline: {', '.join(report.baseline_months)}. "
+                        "Ranked by extra spending, not a prediction or fraud alert."
+                    ),
+                    groups(
+                        "baseline", report.above_baseline[:10], ("spending", "baseline", "above")
+                    ),
+                ]
+            expenses = drill_rows(engine, filter_data(report.filters), {}, spending_only=True)
+            children += [
+                html.H3("Largest expenses"),
+                transaction_grid(
+                    "expenses", sorted(expenses, key=lambda row: row["amount_cents"])[:10]
+                ),
+            ]
+    return children
+
+
+def drill_rows(
+    engine: Engine, data: dict[str, Any], metadata: dict[str, Any], *, spending_only: bool = False
+) -> list[dict[str, Any]]:
+    filters = read_filters(data)
+    start = (
+        max(date.fromisoformat(metadata["start"]), filters.start or date.min)
+        if metadata.get("start")
+        else filters.start
+    )
+    end = (
+        min(date.fromisoformat(metadata["end"]), filters.end or date.max)
+        if metadata.get("end")
+        else filters.end
+    )
+    if metadata.get("month"):
+        month = month_period(date.fromisoformat(f"{metadata['month']}-01"))
+        start = max(month.start, start or date.min)
+        end = min(month.end, end or date.max)
+    if start is not None and end is not None and start > end:
+        return []
+    selection = replace(
+        filters,
+        start=start,
+        end=end,
+        category_id=metadata.get("category_id", filters.category_id),
+        merchant=metadata.get("merchant", filters.merchant),
+    )
+    kinds = {row["id"]: row["kind"] for row in categories(engine)}
+    rows = [
+        row
+        for row in transaction_rows(engine, selection)
+        if kinds.get(row["category_id"], "uncategorized") != "transfer"
+        and not row["repayment_excluded"]
+    ]
+    if (
+        spending_only
+        or "category_id" in metadata
+        or "merchant" in metadata
+        or metadata.get("bucket") == "spending"
+    ):
+        rows = [row for row in rows if row["amount_cents"] < 0]
+    bucket = metadata.get("bucket")
+    if bucket == "income":
+        rows = [
+            row for row in rows if row["amount_cents"] > 0 and row["category_id"] != "uncategorized"
+        ]
+    if bucket in {"uncategorized_outgoing", "uncategorized_incoming"}:
+        rows = [
+            row
+            for row in rows
+            if row["category_id"] == "uncategorized"
+            and (
+                row["amount_cents"] < 0
+                if bucket == "uncategorized_outgoing"
+                else row["amount_cents"] > 0
+            )
+        ]
+    return rows
+
+
+def register_report(app: Dash, engine: Engine, prefix: str, *, overview: bool = False) -> None:
+    @callback(
+        app,
+        Output(f"{prefix}-currency", "options"),
+        Output(f"{prefix}-currency", "value"),
+        Output(f"{prefix}-month", "options"),
+        Output(f"{prefix}-month", "value"),
+        Input("revision", "data"),
+        Input(f"{prefix}-currency", "value"),
+        *([] if overview else [Input("analysis-filters", "data")]),
+        State(f"{prefix}-month", "value"),
+    )
+    def options(_revision: str, currency: str | None, *settings: Any) -> tuple[Any, ...]:
+        month = settings[-1]
+        filters = Filters() if overview else read_filters(settings[0])
+        if filters.category_id not in {row["id"] for row in categories(engine)}:
+            filters = replace(filters, category_id=None)
+        currencies = currency_options(engine, filters)
+        currency = currency if currency in currencies else next(iter(currencies), None)
+        if currency is None:
+            return [], None, [], None
+        history = observed_history(engine, currency)
+        lower = max(min(span[0] for span in history.values()), filters.start or date.min)
+        upper = min(max(span[1] for span in history.values()), filters.end or date.max)
+        if lower > upper:
+            return currencies, currency, [], None
+        period = Period(lower, upper)
+        months = months_in(period)
+        default = months[-1] if overview else default_overview_month(period, date.today())
+        return currencies, currency, list(reversed(months)), month if month in months else default
+
+    if not overview:
+
+        @callback(
+            app,
+            Output("analysis-period", "options"),
+            Output("analysis-trends", "options"),
+            Input("revision", "data"),
+            Input("analysis-currency", "value"),
+        )
+        def analysis_options(_revision: str, currency: str | None) -> tuple[Any, ...]:
+            history = observed_history(engine, currency) if bool(currency) else {}
+            return (
+                [
                     "All history",
                     "Last 12 months",
                     *sorted({m[:4] for m in history}, reverse=True),
                     "Custom dates",
-                ]
-                if state.history_period not in presets:
-                    state.history_period = "All history"
-                ui.select(
-                    presets,
-                    value=state.history_period,
-                    label="History period",
-                    on_change=lambda e: update("history_period", e.value),
-                ).classes("w-48")
-                if state.history_period == "Custom dates":
-                    if not state.custom_start:
-                        state.custom_start = lower.isoformat()
-                    if not state.custom_end:
-                        state.custom_end = upper.isoformat()
-                    iso_date_input(
-                        "Analysis from",
-                        value=state.custom_start,
-                        on_change=lambda e: update("custom_start", e.value),
-                    )
-                    iso_date_input(
-                        "Analysis through",
-                        value=state.custom_end,
-                        on_change=lambda e: update("custom_end", e.value),
-                    )
-                    try:
-                        selected = Period(
-                            date.fromisoformat(state.custom_start),
-                            date.fromisoformat(state.custom_end),
-                        )
-                    except ValueError:
-                        ui.label("Enter a valid analysis date range.").classes("text-red-700")
-                        return
-                elif state.history_period.isdigit():
-                    year = int(state.history_period)
-                    selected = Period(date(year, 1, 1), date(year, 12, 31))
-                elif state.history_period == "Last 12 months":
-                    selected = Period(month_start(upper, -11), month_period(upper).end)
-                else:
-                    selected = Period(month_start(lower), month_period(upper).end)
-                ui.select(
-                    ["Monthly", "Yearly"],
-                    value=state.grouping,
-                    label="Trend grouping",
-                    on_change=lambda e: update("grouping", e.value),
-                ).classes("w-40")
-            if not monthly:
-                ui.select(
-                    ["Previous period", "Same period last year"],
-                    value=state.comparison,
-                    label="Compare with",
-                    on_change=lambda e: update("comparison", e.value),
-                ).classes("w-56")
-        # Global date filters constrain the period, but observed boundary dates do not
-        # truncate it: an incomplete month must not look like a complete short period.
-        selected_start = max(selected.start, filters.start or selected.start)
-        selected_end = min(selected.end, filters.end or selected.end)
-        if selected_start > selected_end:
-            ui.label("This period does not overlap the active date filters.")
-            return
-        selected = Period(selected_start, selected_end)
-        report = build_report(
-            engine,
-            replace(filters, currency=chosen),
-            selected,
-            year_ago=state.comparison == "Same period last year",
-        )
-        if warning := repayment_warning(transaction_rows(engine, report.filters)):
-            ui.label(warning).classes("text-sm text-amber-800")
-        if not report.totals["outgoing_cents"] and not report.totals["incoming_cents"]:
-            ui.label("No financial activity matches these filters in this period.")
-        with (
-            ui.row()
-            .classes("analysis-context w-full items-center gap-x-4 gap-y-1 px-3 py-3")
-            .props('role="group" aria-label="Selected analysis context"')
-            .mark("analysis-context")
-        ):
-            (
-                ui.label(period_label(selected))
-                .classes("text-lg font-semibold text-blue-900")
-                .style("text-wrap: balance")
-                .props(f'title="Selected period: {selected.start} through {selected.end}"')
+                ],
+                [{"label": row["name"], "value": row["id"]} for row in categories(engine)],
             )
-            ui.label(f"{state.view} · {chosen}").classes("text-sm text-gray-700")
-        partial = selected.start < first or selected.end > last or selected.end > date.today()
-        if partial or selected.start.day != 1 or selected.end != month_period(selected.end).end:
-            ui.label(
-                "Partial period: recorded history or date filters do not span "
-                "full calendar months."
-                + (" Comparison totals are not adjusted for missing days." if not monthly else "")
-            ).classes("text-amber-800 text-sm")
-        missing = [row["month"] for row in report.series if not row["observed"]]
-        if missing:
-            ui.label(
-                f"No recorded activity: {', '.join(missing)}. "
-                "Monthly charts show gaps; yearly totals sum recorded activity."
-            ).classes("text-amber-800 text-sm")
 
-        def drill(
-            metadata: dict[str, Any] | None = None,
-            *,
-            spending_only: bool = False,
-            within_period: bool = True,
-        ) -> None:
-            metadata = metadata or {}
-            start = max(
-                selected.start if within_period else filters.start or date.min,
-                date.fromisoformat(metadata.get("start", selected.start.isoformat())),
+    inputs = (
+        []
+        if overview
+        else [
+            Input("analysis-filters", "data"),
+            *[
+                Input(f"analysis-{name}", prop)
+                for name, prop in [
+                    ("view", "value"),
+                    ("period", "value"),
+                    ("start", "date"),
+                    ("end", "date"),
+                    ("comparison", "value"),
+                    ("grouping", "value"),
+                    ("breakdown", "value"),
+                    ("trends", "value"),
+                    ("rolling", "value"),
+                ]
+            ],
+        ]
+    )
+
+    @callback(
+        app,
+        Output(f"{prefix}-report", "children"),
+        Output(f"{prefix}-context", "data"),
+        Input("revision", "data"),
+        Input(f"{prefix}-currency", "value"),
+        Input(f"{prefix}-month", "value"),
+        *inputs,
+    )
+    def render(
+        _revision: str, currency: str | None, month: str | None, *settings: Any
+    ) -> tuple[Any, Any]:
+        if not bool(currency):
+            message = (
+                "No transactions yet. Import a bank export to see your overview."
+                if overview
+                else "No matching history. Import transactions or adjust the filters."
             )
-            end = min(
-                selected.end if within_period else filters.end or date.max,
-                date.fromisoformat(metadata.get("end", selected.end.isoformat())),
-            )
-            if metadata.get("month"):
-                end = min(
-                    selected.end, month_period(date.fromisoformat(f"{metadata['month']}-01")).end
-                )
-            if start > end:
-                return
-            selection = replace(
-                report.filters,
+            return html.P(message), None
+        values = settings or (
+            {},
+            "Monthly overview",
+            "All history",
+            None,
+            None,
+            "Previous period",
+            "Monthly",
+            "Categories",
+            [],
+            [],
+        )
+        (
+            data,
+            view,
+            history_period,
+            start,
+            end,
+            comparison,
+            grouping,
+            breakdown,
+            trends,
+            rolling,
+        ) = values
+        try:
+            filters = read_filters(data)
+            # Removed category filters must not leave a report permanently empty.
+            if filters.category_id not in {row["id"] for row in categories(engine)}:
+                filters = replace(filters, category_id=None)
+            report = choose_report(
+                engine,
+                filters,
+                currency,
+                month,
+                view=view,
+                history_period=history_period,
                 start=start,
                 end=end,
-                category_id=metadata.get("category_id", report.filters.category_id),
-                merchant=metadata.get("merchant", report.filters.merchant),
+                comparison=comparison,
             )
-            # Determine transfer/income behavior using the same active category convention
-            # as SQL aggregation. Drill-down must reconcile to the displayed spending.
-            from .manual import categories
+        except ValueError as exc:
+            return html.P(str(exc), className="error"), None
+        context = {
+            "filters": filter_data(report.filters),
+            "base": filter_data(filters),
+            "merchant": breakdown == "Merchants",
+            "monthly": view == "Monthly overview",
+        }
+        return report_children(
+            engine,
+            prefix,
+            report,
+            overview=overview,
+            monthly=context["monthly"],
+            merchant=context["merchant"],
+            yearly=view != "Monthly overview" and grouping == "Yearly",
+            rolling=bool(rolling),
+            selected_categories=trends,
+            base_filters=filters,
+        ), context
 
-            kinds = {row["id"]: row["kind"] for row in categories(engine)}
-            rows = [
-                row
-                for row in transaction_rows(engine, selection)
-                if kinds.get(row["category_id"], "uncategorized") != "transfer"
-                and not row["repayment_excluded"]
-            ]
-            if spending_only or "category_id" in metadata or "merchant" in metadata:
-                rows = [row for row in rows if row["amount_cents"] < 0]
-            bucket = metadata.get("bucket")
-            if bucket in {"uncategorized_outgoing", "uncategorized_incoming"}:
-                rows = [
-                    row
-                    for row in rows
-                    if kinds.get(row["category_id"], "uncategorized") == "uncategorized"
-                    and (
-                        row["amount_cents"] < 0
-                        if bucket == "uncategorized_outgoing"
-                        else row["amount_cents"] > 0
-                    )
-                ]
-            with ui.dialog() as dialog, ui.card().classes("w-full max-w-5xl"):
-                ui.label("Transactions behind this report").classes("text-xl font-semibold")
-                ui.label(f"{chosen} · {start} through {end} · {len(rows):,} transactions")
-                if selection.category_id is not None:
-                    category_name = next(
-                        (c["name"] for c in categories(engine) if c["id"] == selection.category_id),
-                        selection.category_id,
-                    )
-                    ui.label(f"Category: {category_name}")
-                if selection.merchant is not None:
-                    ui.label(f"Merchant: {selection.merchant}")
-                if "category_id" in metadata or "merchant" in metadata:
-                    detail_start = max(
-                        month_start(start, -11), month_start(first), filters.start or date.min
-                    )
-                    detail_report = build_report(engine, selection, Period(detail_start, end))
-                    detail_series = detail_report.series
-                    detail_average = detail_report.average_cents
-                    ui.label(f"Spending trend · {detail_start} through {end}").classes("text-sm")
-                    if detail_average is not None:
-                        ui.label(
-                            "Average monthly spending · "
-                            f"{money(detail_average)} {chosen} · "
-                            f"{len(detail_report.eligible_months)} eligible months"
-                        ).classes("font-medium")
-                    else:
-                        ui.label(
-                            "Insufficient history for average monthly spending: "
-                            "no full interior months with recorded activity."
-                        ).classes("text-sm text-gray-600")
-                    AnalysisPlot(
-                        cashflow_figure(
-                            detail_series,
-                            chosen,
-                            spending_only=True,
-                            average_cents=detail_average,
-                        )
-                    ).classes("w-full")
-                table = (
-                    ui.table(
-                        columns=columns(
-                            "booking_date",
-                            "description",
-                            "category",
-                            "amount",
-                            "currency",
-                            money_columns=("amount",),
-                        ),
-                        rows=[
-                            dict(
-                                row,
-                                booking_date=row["booking_date"].isoformat(),
-                                value_date=row["value_date"].isoformat(),
-                            )
-                            for row in rows
-                        ],
-                        row_key="id",
-                        pagination=15,
-                    )
-                    .classes("w-full")
-                    .mark("analysis-transactions")
-                )
-                table.on("rowClick", lambda e: open_transaction(e.args[1]), [[], None, None])
-                ui.button("Back to analysis", on_click=dialog.close).props("flat")
-            dialog.on("hide", dialog.delete)
-            dialog.open()
-
-        def chart(
-            figure: go.Figure, *, spending_only: bool = False, limit_to_selected: bool = True
-        ) -> None:
-            plot = AnalysisPlot(figure).classes("w-full")
-
-            def clicked(event: events.GenericEventArguments) -> None:
-                points = event.args.get("points", [])
-                if points:
-                    data = points[0].get("customdata")
-                    if isinstance(data, dict):
-                        # Overview trend periods can lie outside the selected month.
-                        if not limit_to_selected and data.get("start"):
-                            drill(data, spending_only=spending_only, within_period=False)
-                        else:
-                            drill(data, spending_only=spending_only)
-
-            plot.on("plotly_click", clicked, args=["points"])
-
-        with ui.row().classes("w-full gap-4"):
-            for title, field_name in (
-                ("Spending", "spending_cents"),
-                ("Income", "income_cents"),
-                ("Net cash flow", "net_cents"),
-            ):
-                with ui.card().classes("flex-1 min-w-48"):
-                    ui.label(title).classes("text-gray-600")
-                    ui.label(f"{money(report.totals[field_name])} {chosen}").classes(
-                        "text-2xl font-semibold"
-                    ).mark(f"analysis-{field_name}")
-        ui.label(
-            f"Uncategorized · outgoing "
-            f"{money(report.totals['uncategorized_outgoing_cents'])} {chosen} · "
-            f"incoming {money(report.totals['uncategorized_incoming_cents'])} {chosen}"
-        ).classes("text-sm")
-        ui.label(
-            f"All non-transfer money · outgoing "
-            f"{money(report.totals['outgoing_cents'])} {chosen} · "
-            f"incoming {money(report.totals['incoming_cents'])} {chosen}"
-        ).classes("text-sm")
-        ui.button("View report transactions", on_click=lambda: drill()).props("outline").mark(
-            "analysis-drill"
-        )
-        if not monthly:
-            render_changes(report, chosen, money, columns, drill, state.breakdown == "Merchants")
-
-        if monthly:
-            trend_period = Period(
-                max(
-                    month_start(selected.start, -11), month_start(first), filters.start or date.min
-                ),
-                selected.end,
-            )
-            trend_report = build_report(engine, replace(filters, currency=chosen), trend_period)
-        else:
-            trend_report = report
-        typical = trend_report
-        if typical.average_cents is not None and typical.median_cents is not None:
-            ui.label(
-                f"Typical month · average {money(typical.average_cents)} {chosen} · "
-                f"median {money(typical.median_cents)} {chosen} · "
-                f"{len(typical.eligible_months)} eligible months"
-            ).classes("text-lg font-medium")
-            ui.label(
-                f"Statistics window: {trend_report.period.start} "
-                f"through {trend_report.period.end}. "
-                "Averages are rounded to the nearest cent."
-            ).classes("text-sm text-gray-600")
-        else:
-            ui.label(
-                "Insufficient history for typical-month statistics: "
-                "no full interior months with recorded activity."
-            )
-        with ui.row().classes("items-end w-full"):
-            ui.checkbox(
-                "Show 3-month spending average",
-                value=state.rolling,
-                on_change=lambda e: update("rolling", e.value),
-            ).set_enabled(monthly or state.grouping == "Monthly")
-            category_options = {row["key"]: row["name"] for row in trend_report.categories}
-            state.selected_categories = [
-                key for key in state.selected_categories if key in category_options
-            ]
-            ui.select(
-                category_options,
-                value=state.selected_categories,
-                multiple=True,
-                label="Category trends (empty = totals)",
-                on_change=lambda e: update("selected_categories", e.value or []),
-            ).props("use-chips clearable").classes("min-w-80")
-        chart(
-            cashflow_figure(
-                trend_report.series,
-                chosen,
-                yearly=not monthly and state.grouping == "Yearly",
-                rolling=state.rolling,
-                categories=[
-                    row
-                    for row in trend_report.categories
-                    if row["key"] in state.selected_categories
-                ],
-            ),
-            limit_to_selected=not monthly,
-        )
-        with ui.row().classes("items-center"):
-            ui.label("Where the money went").classes("text-xl font-semibold")
-            ui.toggle(
-                ["Categories", "Merchants"],
-                value=state.breakdown,
-                on_change=lambda e: update("breakdown", e.value),
-            ).mark("analysis-breakdown")
-        groups = report.merchants if state.breakdown == "Merchants" else report.categories
-        if monthly and state.breakdown == "Categories":
-            typical_categories = {row["key"]: row for row in trend_report.categories}
-            groups = [
-                dict(
-                    row,
-                    average_cents=typical_categories.get(row["key"], {}).get("average_cents"),
-                    median_cents=typical_categories.get(row["key"], {}).get("median_cents"),
-                )
-                for row in groups
-            ]
-        chart(
-            breakdown_figure(groups, chosen, merchant=state.breakdown == "Merchants"),
-            spending_only=True,
-        )
-        ui.label(
-            "Bars show the top 20; the table includes all groups. "
-            "Click a bar or table row to inspect spending."
-        ).classes("text-sm text-gray-600")
-        if state.breakdown == "Categories":
-            ui.label("Category averages and medians use the statistics window above.").classes(
-                "text-sm text-gray-600"
-            )
-        table = (
-            ui.table(
-                columns=[
-                    *columns("name", "spending", money_columns=("spending",)),
-                    {
-                        "name": "share",
-                        "label": "Share of spending (%)",
-                        "field": "share",
-                        "sortable": True,
-                        ":format": "v => v.toFixed(1)",
-                    },
-                    *(
-                        []
-                        if state.breakdown == "Merchants"
-                        else columns("average", "median", money_columns=("average", "median"))
-                    ),
-                ],
-                rows=groups,
-                row_key="key",
-                pagination=15,
-            )
-            .classes("w-full")
-            .mark("analysis-breakdown-table")
-        )
-        table.on(
-            "rowClick",
-            lambda e: drill(
-                {"merchant" if state.breakdown == "Merchants" else "category_id": e.args[1]["key"]},
-                spending_only=True,
-            ),
-            [[], None, None],
-        )
-        if not monthly:
-            chart(
-                spending_heatmap(report.categories, months_in(selected), chosen), spending_only=True
-            )
-            month_columns = [
-                {
-                    "name": month,
-                    "label": month,
-                    "field": month,
-                    "sortable": True,
-                    ":format": (
-                        "v => v === null ? '—' : (v / 100).toLocaleString('en-US', "
-                        "{minimumFractionDigits: 2, maximumFractionDigits: 2})"
-                    ),
-                }
-                for month in months_in(selected)
-            ]
-            ui.table(
-                columns=[*columns("name"), *month_columns],
-                rows=[dict(row, **row["monthly_cents"]) for row in report.categories],
-                row_key="key",
-                pagination=15,
-            ).classes("w-full").mark("analysis-month-table")
-        else:
-            ui.label("Above recent monthly spending").classes("text-xl font-semibold")
-            if len(report.baseline_months) < 3:
-                ui.label(
-                    "At least three full observed months in the preceding six months "
-                    "are needed for a baseline."
-                )
-            else:
-                ui.label(
-                    f"Baseline: {', '.join(report.baseline_months)}. "
-                    "Ranked by extra spending, not a prediction or fraud alert."
-                ).classes("text-sm text-gray-600")
-                baseline = ui.table(
-                    columns=columns(
-                        "name",
-                        "spending",
-                        "baseline",
-                        "above",
-                        money_columns=("spending", "baseline", "above"),
-                    ),
-                    rows=report.above_baseline[:10],
-                    row_key="key",
-                    pagination=10,
-                ).classes("w-full")
-                baseline.on(
-                    "rowClick",
-                    lambda e: drill({"category_id": e.args[1]["key"]}, spending_only=True),
-                    [[], None, None],
-                )
-            ui.label("Largest expenses").classes("text-xl font-semibold")
-            from .manual import categories
-
-            kinds = {row["id"]: row["kind"] for row in categories(engine)}
-            expenses = sorted(
-                [
-                    row
-                    for row in transaction_rows(engine, report.filters)
-                    if row["amount_cents"] < 0
-                    and kinds.get(row["category_id"], "uncategorized") != "transfer"
-                    and not row["repayment_excluded"]
-                ],
-                key=lambda row: row["amount_cents"],
-            )[:10]
-            expense_table = ui.table(
-                columns=columns(
-                    "booking_date", "description", "category", "amount", money_columns=("amount",)
-                ),
-                rows=[
-                    dict(
-                        row,
-                        booking_date=row["booking_date"].isoformat(),
-                        value_date=row["value_date"].isoformat(),
-                    )
-                    for row in expenses
-                ],
-                row_key="id",
-                pagination=10,
-            ).classes("w-full")
-            expense_table.on("rowClick", lambda e: open_transaction(e.args[1]), [[], None, None])
-
-    dashboard()
-
-
-def render_changes(
-    report: Report,
-    currency: str,
-    money: Callable[[int], str],
-    columns: Callable[..., list[dict[str, Any]]],
-    drill: Callable[..., None],
-    merchant: bool,
-) -> None:
-    ui.label("What changed?").classes("text-xl font-semibold")
-    ui.label(
-        f"Compared with {report.comparison.start} through {report.comparison.end}; "
-        "the same non-date filters apply."
-    ).classes("text-sm text-gray-600")
-    if not report.comparison_observed:
-        ui.label("No comparison data in this period.")
-        return
-    before = report.previous["spending_cents"]
-    delta = report.totals["spending_cents"] - before
-    percent = f"{100 * delta / before:+.1f}%" if before else "No prior spending"
-    ui.label(f"Spending change: {money(delta)} {currency} · {percent}").classes("text-lg")
-    missing = [month for month in months_in(report.comparison) if month not in report.history]
-    first = min(span[0] for span in report.history.values())
-    last = max(span[1] for span in report.history.values())
-    if (
-        missing
-        or report.comparison.start < first
-        or report.comparison.end > min(last, date.today())
-    ):
-        ui.label(
-            "Comparison history has gaps or partial boundaries; "
-            "totals may not cover equivalent activity."
-        ).classes("text-amber-800 text-sm")
-    rows = report.merchant_changes if merchant else report.category_changes
-    nonzero = [row for row in rows if row["change_cents"]]
-    if not nonzero:
-        ui.label("No spending change across these groups.")
-        return
-    leader = nonzero[0]
-    ui.label(f"Largest contributor: {leader['name']} ({money(leader['change_cents'])} {currency}).")
-    table = (
-        ui.table(
-            columns=[
-                *columns(
-                    "name",
-                    "spending",
-                    "previous",
-                    "change",
-                    money_columns=("spending", "previous", "change"),
-                ),
-                {
-                    "name": "change_percent",
-                    "label": "Change (%)",
-                    "field": "change_percent",
-                    "sortable": True,
-                    ":format": "v => v === null ? 'No prior spending' : v.toFixed(1) + '%'",
-                },
-            ],
-            rows=rows,
-            row_key="key",
-            pagination=10,
-        )
-        .classes("w-full")
-        .mark("analysis-changes")
+    @callback(
+        app,
+        Output(f"{prefix}-drill", "children"),
+        Input({"type": f"{prefix}-chart", "index": ALL}, "clickData"),
+        Input({"type": f"{prefix}-group", "index": ALL}, "cellClicked"),
+        Input(f"{prefix}-all-transactions", "n_clicks"),
+        Input(f"{prefix}-close-drill", "n_clicks"),
+        Input(f"{prefix}-context", "data"),
+        State({"type": f"{prefix}-group", "index": ALL}, "rowData"),
+        State({"type": f"{prefix}-group", "index": ALL}, "id"),
+        prevent_initial_call=True,
     )
-    table.on(
-        "rowClick",
-        lambda e: drill(
-            {"merchant" if merchant else "category_id": e.args[1]["key"]}, spending_only=True
-        ),
-        [[], None, None],
-    )
+    def drill(
+        clicks: list[Any],
+        cells: list[Any],
+        _all: int,
+        _close: int,
+        context: dict[str, Any] | None,
+        rows: list[Any],
+        identities: list[Any],
+    ) -> Any:
+        if context is None or ctx.triggered_id in (f"{prefix}-context", f"{prefix}-close-drill"):
+            return []
+        identity = ctx.triggered_id
+        metadata: dict[str, Any] = {}
+        spending_only = True
+        if identity == f"{prefix}-all-transactions":
+            identity = {"index": "all"}
+            spending_only = False
+        elif isinstance(identity, dict) and identity["type"] == f"{prefix}-chart":
+            chart_ids = ctx.inputs_list[0]
+            click = next(
+                (clicks[i] for i, item in enumerate(chart_ids) if item["id"] == identity), None
+            )
+            if not click or not click.get("points"):
+                raise PreventUpdate
+            metadata = click["points"][0].get("customdata") or {}
+            if not isinstance(metadata, dict):
+                raise PreventUpdate
+            spending_only = identity["index"] != "trend"
+        elif isinstance(identity, dict):
+            i = identities.index(identity)
+            if not cells[i]:
+                raise PreventUpdate
+            row = next((row for row in rows[i] if row["key"] == cells[i]["rowId"]), None)
+            if row is None:
+                raise PreventUpdate
+            metadata = {
+                "merchant"
+                if context["merchant"] and identity["index"] != "baseline"
+                else "category_id": row["key"]
+            }
+        else:
+            raise PreventUpdate
+        data = dict(context["filters"])
+        if identity["index"] == "trend" and context["monthly"]:
+            data["start"], data["end"] = metadata.get("start"), metadata.get("end")
+        base = read_filters(context["base"])
+        if metadata.get("start") and base.start:
+            metadata["start"] = max(metadata["start"], base.start.isoformat())
+        if metadata.get("end") and base.end:
+            metadata["end"] = min(metadata["end"], base.end.isoformat())
+        selected = drill_rows(engine, data, metadata, spending_only=spending_only)
+        children: list[Any] = [
+            html.H3("Transactions behind this report"),
+            html.P(
+                f"{len(selected):,} transactions · "
+                f"{data.get('currency')} · "
+                f"{metadata.get('start') or data.get('start')} through "
+                f"{metadata.get('end') or data.get('end')}"
+            ),
+        ]
+        if "category_id" in metadata or "merchant" in metadata:
+            category_name = next(
+                (
+                    row["name"]
+                    for row in categories(engine)
+                    if row["id"] == metadata.get("category_id")
+                ),
+                None,
+            )
+            children.append(
+                html.P(
+                    f"Category: {category_name}"
+                    if category_name is not None
+                    else f"Merchant: {metadata.get('merchant')}"
+                )
+            )
+            selection = replace(
+                read_filters(data),
+                category_id=metadata.get("category_id", data.get("category_id")),
+                merchant=metadata.get("merchant", data.get("merchant")),
+            )
+            end = selection.end or date.today()
+            history = observed_history(engine, selection.currency or "")
+            first = min(span[0] for span in history.values())
+            start = max(
+                month_start(selection.start or end, -11), month_start(first), base.start or date.min
+            )
+            trend = build_report(engine, selection, Period(start, end))
+            average = (
+                f"Average monthly spending · {money(trend.average_cents)} "
+                f"{selection.currency} · {len(trend.eligible_months)} eligible months"
+                if trend.average_cents is not None
+                else "Insufficient history for average monthly spending."
+            )
+            children += [
+                html.P(average),
+                dcc.Graph(
+                    figure=cashflow_figure(
+                        trend.series,
+                        selection.currency or "",
+                        spending_only=True,
+                        average_cents=trend.average_cents,
+                    )
+                ),
+            ]
+        children.append(transaction_grid(f"{prefix}-drill", json_rows(selected)))
+        return children

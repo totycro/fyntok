@@ -1,6 +1,6 @@
 # Repository layout
 
-- `src/fyntok/`: Python application, NiceGUI dashboard, CLI, SQLite storage, and AI categorization.
+- `src/fyntok/`: Python application, Dash dashboard, CLI, SQLite storage, and AI categorization.
 - `tests/`: Automated tests; `tests/acceptance/` covers user workflows.
 - `data/`: Transaction CSV data.
 - `evaluations/`: Categorization evaluation sample and report.

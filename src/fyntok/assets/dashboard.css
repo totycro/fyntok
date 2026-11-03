@@ -1,0 +1,25 @@
+:root { font-family: system-ui, sans-serif; color: #172338; background: #f5f7fb; }
+body { margin: 0; }
+main { max-width: 1440px; margin: auto; padding: 24px; }
+header, .controls, .metrics, .actions { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; }
+header { justify-content: space-between; align-items: center; }
+h1 { margin: 0; font-size: 30px; } h2 { font-size: 22px; } h3 { font-size: 18px; }
+button, input, textarea { font: inherit; padding: 9px 12px; border: 1px solid #b9c4d4; border-radius: 6px; }
+button { background: #2459af; color: white; cursor: pointer; }
+button:disabled { opacity: .5; cursor: wait; }
+button:focus-visible, input:focus-visible { outline: 3px solid #91b7f1; outline-offset: 2px; }
+.control { min-width: 190px; flex: 1; max-width: 360px; }
+.control label { display: block; margin-bottom: 6px; }
+.control input, textarea { box-sizing: border-box; width: 100%; }
+section, .card { background: white; border-radius: 10px; padding: 20px; margin-top: 16px; }
+.metric { flex: 1; min-width: 180px; background: #edf3ff; border-radius: 8px; padding: 16px; }
+.metric strong { display: block; font-size: 25px; margin-top: 8px; font-variant-numeric: tabular-nums; }
+.context { position: sticky; top: 0; z-index: 5; padding: 14px; background: #eaf2ff; border-left: 4px solid #2459af; }
+.muted { color: #53627a; } .warning { color: #855300; } .error { color: #ac2020; }
+.status { white-space: pre-wrap; padding: 10px 0; }
+dialog { border: 0; border-radius: 12px; padding: 24px; max-height: 88vh; width: min(1000px, 90vw); overflow: auto; }
+dialog::backdrop { background: #10223a88; }
+#tools-dialog { margin-right: 0; margin-top: 0; height: 100vh; max-height: 100vh; width: min(650px, 90vw); border-radius: 0; box-sizing: border-box; }
+.upload { padding: 32px; border: 2px dashed #b9c4d4; border-radius: 8px; text-align: center; cursor: pointer; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 640px) { main { padding: 12px; } .control { max-width: 100%; min-width: 100%; } }
