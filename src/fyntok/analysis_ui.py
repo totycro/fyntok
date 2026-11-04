@@ -280,6 +280,7 @@ def report_children(
             rows,
             [*columns("name", *fields, money_columns=fields), *extra],
             key="key",
+            clickable=True,
         )
 
     trend = report

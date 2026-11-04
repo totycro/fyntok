@@ -48,12 +48,14 @@ def grid(
     key: str = "id",
     editable: bool = False,
     selectable: bool = False,
+    clickable: bool = False,
 ) -> dag.AgGrid:
     return dag.AgGrid(
         id=identity,
         rowData=json_rows(rows),
         columnDefs=fields,
         getRowId=f"params.data.{key}",
+        rowClass="clickable-row" if clickable else None,
         defaultColDef={
             "sortable": True,
             "filter": True,
@@ -118,6 +120,7 @@ def transaction_grid(identity: str, rows: list[dict[str, Any]]) -> dag.AgGrid:
             "repayment_status",
             money_columns=("amount",),
         ),
+        clickable=True,
     )
 
 

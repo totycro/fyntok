@@ -22,4 +22,6 @@ dialog::backdrop { background: #10223a88; }
 #tools-dialog { margin-right: 0; margin-top: 0; height: 100vh; max-height: 100vh; width: min(650px, 90vw); border-radius: 0; box-sizing: border-box; }
 .upload { padding: 32px; border: 2px dashed #b9c4d4; border-radius: 8px; text-align: center; cursor: pointer; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ag-row.clickable-row .ag-cell { cursor: pointer; }
+.ag-row.clickable-row { --ag-row-hover-color: #edf3ff; }
 @media (max-width: 640px) { main { padding: 12px; } .control { max-width: 100%; min-width: 100%; } }
